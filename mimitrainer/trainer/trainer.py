@@ -332,7 +332,7 @@ class MimiTrainer(nn.Module):
                 
                 x, semantic_feature = batch
                 x_squeezed = x.cpu().squeeze().numpy()
-                x = x.unsqueeze(1)
+                # x = x.unsqueeze(1)
                 # x = x.squeeze().numpy()
                 inputs = self.feature_extractor(raw_audio=x_squeezed, sampling_rate=24000, return_tensors='pt').to(self.device)
                 model_outs = self.generator(inputs['input_values'])
@@ -400,7 +400,7 @@ class MimiTrainer(nn.Module):
                             x, semantic_feature = batch
                             x_squeezed = x.cpu().squeeze().numpy()
                             # print(x.shape)
-                            x = x.unsqueeze(1)
+                            # x = x.unsqueeze(1)
                             # x = x.squeeze().numpy()
 
                             inputs = self.feature_extractor(raw_audio=x_squeezed,
