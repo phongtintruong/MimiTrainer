@@ -5,6 +5,7 @@ import random
 import torch
 import numpy as np
 
+
 def collate_fn(data):
     # return pad_sequence(data, batch_first=True)
     # return pad_sequence(*data)
@@ -17,7 +18,7 @@ def collate_fn(data):
             else:
                 output = torch.tensor([datum])
             outputs.append(output)
-        return tuple(outputs)        
+        return tuple(outputs)
     for datum in zip(*data):
         if isinstance(datum[0], torch.Tensor):
             output = pad_sequence(datum, batch_first=True)
@@ -27,45 +28,64 @@ def collate_fn(data):
 
     return tuple(outputs)
 
+
 def get_dataloader(ds, **kwargs):
     return DataLoader(ds, collate_fn=collate_fn, **kwargs)
 
+
 class audioDataset(Dataset):
-    
+
     def __init__(self,
                  file_list,
                  segment_size,
                  sample_rate,
-                 downsample_rate = 320,
                  valid=False):
         super().__init__()
         self.file_list = file_list
         self.segment_size = segment_size
         self.sample_rate = sample_rate
         self.valid = valid
-        self.downsample_rate = downsample_rate
-        
+
     def __len__(self):
         return len(self.file_list)
-    
-    
+
     def __getitem__(self, index):
         file = self.file_list[index].strip()
-        audio_file, feature_file = file.split('\t')
+        audio_file, feature_file = file.split('\t')  # Assuming tab-separated file paths
         audio, sr = torchaudio.load(audio_file)
         feature = torch.from_numpy(np.load(feature_file))
-        audio = audio.mean(axis=0)
+
+        # If the audio has multiple channels, take the mean to make it mono
+        if audio.shape[0] > 1:
+            audio = audio.mean(dim=0, keepdim=True)
+
+        # Resample the audio if necessary
         if sr != self.sample_rate:
-            audio = torchaudio.functional.resample(audio, sr, self.sample_rate)
-        if audio.size(-1) > self.segment_size:
+            resampler = T.Resample(orig_freq=sr, new_freq=self.sample_rate)
+            audio = resampler(audio)
+
+        # Handle audio and feature segment extraction
+        if audio.shape[1] > self.segment_size:
             if self.valid:
-                return audio[:self.segment_size], feature[:self.segment_size // self.downsample_rate]
-            max_audio_start = audio.size(-1) - self.segment_size
-            audio_start = random.randint(0, max_audio_start)
-            audio = audio[audio_start:audio_start+self.segment_size]
-            feature_start = min(int(audio_start / self.downsample_rate), feature.size(0) - self.segment_size // self.downsample_rate)
-            feature = feature[feature_start:feature_start + self.segment_size // self.downsample_rate, :]
+                # For validation, take the first segment
+                audio = audio[:, :self.segment_size]
+                feature = feature[:self.segment_size, :]
+            else:
+                # For training, take a random segment of the audio
+                max_audio_start = audio.shape[1] - self.segment_size
+                audio_start = random.randint(0, max_audio_start)
+                audio = audio[:, audio_start:audio_start + self.segment_size]
+
+                # Adjust feature extraction to match the audio segment
+                feature_start = audio_start
+                feature_end = min(feature_start + self.segment_size, feature.shape[0])
+                feature = feature[feature_start:feature_end, :]
         else:
+            # If audio is shorter than the segment size, pad it if training
             if not self.valid:
-                audio = torch.nn.functional.pad(audio, (0, self.segment_size - audio.size(-1)), 'constant')
+                audio = torch.nn.functional.pad(audio, (0, self.segment_size - audio.shape[1]), 'constant')
+            # If feature is shorter than audio, pad it
+            if feature.shape[0] < self.segment_size:
+                feature = torch.nn.functional.pad(feature, (0, 0, 0, self.segment_size - feature.shape[0]), 'constant')
+
         return audio, feature

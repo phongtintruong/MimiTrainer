@@ -1,1 +1,1 @@
-from .trainer import SpeechTokenizerTrainer
+from .trainer import MimiTrainer

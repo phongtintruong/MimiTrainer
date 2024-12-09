@@ -14,10 +14,12 @@ from .optimizer import get_optimizer
 from torch.utils import tensorboard
 from .loss import *
 import json
-from speechtokenizer import SpeechTokenizer
+# from speechtokenizer import SpeechTokenizer
 import time
 from tqdm import tqdm
 from accelerate import Accelerator, DistributedType, DistributedDataParallelKwargs, DataLoaderConfiguration
+from transformers import MimiModel, AutoFeatureExtractor
+import torchaudio
 
 
 # helpers
@@ -54,11 +56,12 @@ def checkpoint_num_steps(checkpoint_path):
     return int(results[-1])
 
 
-class SpeechTokenizerTrainer(nn.Module):
+class MimiTrainer(nn.Module):
     @beartype
     def __init__(
         self,
-        generator: SpeechTokenizer,
+        generator: MimiModel,
+        feature_extractor: AutoFeatureExtractor,
         discriminators: dict,
         cfg,
         accelerate_kwargs: dict = dict(),
@@ -76,9 +79,9 @@ class SpeechTokenizerTrainer(nn.Module):
         self.epochs = cfg.get("epochs")
         self.num_warmup_steps = cfg.get("num_warmup_steps")
         self.batch_size = cfg.get("batch_size")
-        self.sample_rate = cfg.get('sample_rate')
+        self.sample_rate = self.feature_extractor.sampling_rate
         self.showpiece_num = cfg.get('showpiece_num', 8)
-        project_name = 'SpeechTokenizer'
+        project_name = 'MimiTrainer'
         
         if not self.results_folder.exists():
             self.results_folder.mkdir(parents = True, exist_ok = True)
@@ -100,6 +103,7 @@ class SpeechTokenizerTrainer(nn.Module):
             self.writer = tensorboard.SummaryWriter(os.path.join(results_folder, 'logs'))
 
         self.generator = generator
+        self.feature_extractor = feature_extractor
         self.discriminators = discriminators
         
 
@@ -108,7 +112,7 @@ class SpeechTokenizerTrainer(nn.Module):
         
         
         self.mel_loss_lambdas = cfg.get('mel_loss_lambdas')
-        self.commitment_loss_lambda = cfg.get('commitment_loss_lambda')
+        # self.commitment_loss_lambda = cfg.get('commitment_loss_lambda')
         self.recon_loss_lambda = cfg.get('recon_loss_lambda')
         self.distill_loss_lambda = cfg.get('distill_loss_lambda')
         distill_type = cfg.get('distill_type', 'd_axis')
@@ -145,11 +149,9 @@ class SpeechTokenizerTrainer(nn.Module):
         
         self.ds = audioDataset(file_list=train_file_list,
                                 segment_size=segment_size,
-                                downsample_rate=generator.downsample_rate,
                                 sample_rate=self.sample_rate)
         self.valid_ds = audioDataset(file_list=valid_file_list,
                                     segment_size=self.sample_rate * 30,
-                                    downsample_rate=generator.downsample_rate,
                                     sample_rate=self.sample_rate,
                                     valid=True)
         if self.is_main:
@@ -198,6 +200,7 @@ class SpeechTokenizerTrainer(nn.Module):
 
         (
             self.generator,
+            # self.feature_extractor,
             self.optim_g,
             self.optim_d,
             self.scheduler_g,
@@ -206,6 +209,7 @@ class SpeechTokenizerTrainer(nn.Module):
             self.valid_dl
         ) = self.accelerator.prepare(
             self.generator,
+            # self.feature_extractor,
             self.optim_g,
             self.optim_d,
             self.scheduler_g,
@@ -218,15 +222,15 @@ class SpeechTokenizerTrainer(nn.Module):
         
         
         hps = {"num_train_steps": num_train_steps, "num_warmup_steps": self.num_warmup_steps, "learning_rate": self.lr, "initial_learning_rate": self.initial_lr, "epochs": self.epochs}
-        self.accelerator.init_trackers("SpeechTokenizer", config=hps)
+        self.accelerator.init_trackers("Mimi", config=hps)
         self.best_dev_mel_loss = float('inf')
         self.plot_gt_once = False
 
     def save(self, path, best_dev_mel_loss):
         if best_dev_mel_loss < self.best_dev_mel_loss:
             self.best_dev_mel_loss = best_dev_mel_loss
-            torch.save(self.accelerator.get_state_dict(self.generator), f'{self.results_folder}/SpeechTokenizer_best_dev.pt')
-        ckpts = sorted(Path(path).parent.glob(f'SpeechTokenizerTrainer_*'))
+            torch.save(self.accelerator.get_state_dict(self.generator), f'{self.results_folder}/Mimi_best_dev.pt')
+        ckpts = sorted(Path(path).parent.glob(f'MimiTrainer_*'))
         if len(ckpts) > self.num_ckpt_keep:
             [os.remove(c) for c in ckpts[:-self.num_ckpt_keep]]
         pkg = dict(
@@ -242,7 +246,7 @@ class SpeechTokenizerTrainer(nn.Module):
 
     def load(self, path = None, restore_optimizer = True):
         if not exists(path):
-            ckpts = sorted(self.results_folder.glob(f'SpeechTokenizerTrainer_*'))
+            ckpts = sorted(self.results_folder.glob(f'MimiTrainer_*'))
             path = str(ckpts[-1])
         generator = self.accelerator.unwrap_model(self.generator)
         pkg = torch.load(path, map_location='cpu')
@@ -325,7 +329,8 @@ class SpeechTokenizerTrainer(nn.Module):
                 
                 x, semantic_feature = batch
                 x = x.unsqueeze(1)
-                x_hat, loss_q, feature = self.generator(x)
+                inputs = self.feature_extractor(raw_audio=x, sampling_rate=self.feature_extractor.sampling_rate, return_tensors='pt')
+                feature, x_hat, enc_past_kv, dec_past_kv = self.generator(inputs['input_values'])
                 
                 # Discriminators
                 self.optim_d.zero_grad()
@@ -343,7 +348,7 @@ class SpeechTokenizerTrainer(nn.Module):
                 loss_feature = sum(map(lambda x:feature_loss(*x[2:]), discriminator_outputs))
                 loss_adversarial = sum(map(lambda x:adversarial_loss(x[1]), discriminator_outputs))
                 loss_distill = self.distill_loss(feature, semantic_feature)
-                loss_generator_all = loss_feature + loss_adversarial + loss_mel + loss_q * self.commitment_loss_lambda + loss_recon * self.recon_loss_lambda + self.distill_loss_lambda * loss_distill
+                loss_generator_all = loss_feature + loss_adversarial + loss_mel + loss_recon * self.recon_loss_lambda + self.distill_loss_lambda * loss_distill
                 self.accelerator.backward(loss_generator_all)
                 # if exists(self.max_grad_norm):
                 #     self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
@@ -357,11 +362,11 @@ class SpeechTokenizerTrainer(nn.Module):
                 if self.is_main and not (steps % self.stdout_steps):
                     with torch.inference_mode():
                         mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
-                    self.print(f"Epoch {epoch} -- Step {steps}: Gen Loss: {loss_generator_all.item():0.3f}; Mel Error:{mel_error:0.3f}; Q Loss: {loss_q.item():0.3f}; Distill Loss: {loss_distill.item():0.3f}; Time cost per step: {step_time_log['time_cost'] / self.stdout_steps:0.3f}s")
+                    self.print(f"Epoch {epoch} -- Step {steps}: Gen Loss: {loss_generator_all.item():0.3f}; Mel Error:{mel_error:0.3f}; Distill Loss: {loss_distill.item():0.3f}; Time cost per step: {step_time_log['time_cost'] / self.stdout_steps:0.3f}s")
                     step_time_log = {}
                 if self.is_main and not (steps % self.log_steps):
                     self.log({"train/discriminators loss": loss_disc_all.item(), "train/generator loss": loss_generator_all.item(), "train/feature loss": loss_feature.item(),
-                                          "train/adversarial loss": loss_adversarial.item(), "train/quantizer loss": loss_q.item(), "train/mel loss": loss_mel.item(),
+                                          "train/adversarial loss": loss_adversarial.item(), "train/mel loss": loss_mel.item(),
                                           "train/mel error": mel_error, "train/distillation loss": loss_distill.item(), "train/learning_rate": lr}, step=steps)
                     
                 self.accelerator.wait_for_everyone()
@@ -379,7 +384,12 @@ class SpeechTokenizerTrainer(nn.Module):
                         for i, batch in tqdm(enumerate(self.valid_dl)):                       
                             x, semantic_feature = batch
                             x = x.unsqueeze(1)
-                            x_hat, loss_q, feature = self.generator(x)
+
+                            inputs = self.feature_extractor(raw_audio=x,
+                                                            sampling_rate=self.feature_extractor.sampling_rate,
+                                                            return_tensors='pt')
+                            feature, x_hat, enc_past_kv, dec_past_kv = self.generator(inputs['input_values'])
+
                             mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
                             total_mel_error += mel_error
                             loss_distill = self.distill_loss(feature, semantic_feature).item()
@@ -401,7 +411,7 @@ class SpeechTokenizerTrainer(nn.Module):
                             
                     
                     # save model
-                    model_path = str(self.results_folder / f'SpeechTokenizerTrainer_{steps:08d}')
+                    model_path = str(self.results_folder / f'MimiTrainer_{steps:08d}')
                     self.save(model_path, total_mel_error / num)                        
                     self.print(f'{steps}: saving model to {str(self.results_folder)}')
                     self.generator.train()
