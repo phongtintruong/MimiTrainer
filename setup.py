@@ -9,7 +9,7 @@ AUTHOR = 'Trung Thanh Nguyen' # Update to your name
 REQUIRES_PYTHON = '>=3.8.0'
 
 # This part assumes your version is in MimiTrainer/__init__.py now
-for line in open('__init__.py'):
+for line in open('MimiTrainer/__init__.py'):
     line = line.strip()
     if '__version__' in line:
         context = {}
