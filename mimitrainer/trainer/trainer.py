@@ -332,7 +332,7 @@ class MimiTrainer(nn.Module):
                 
                 x, semantic_feature = batch
                 x = x.unsqueeze(1)
-                inputs = self.feature_extractor(raw_audio=x, sampling_rate=self.feature_extractor.sampling_rate, return_tensors='pt')
+                inputs = self.feature_extractor(raw_audio=x, sampling_rate=24000, return_tensors='pt')
                 feature, x_hat, enc_past_kv, dec_past_kv = self.generator(inputs['input_values'])
                 
                 # Discriminators
@@ -389,7 +389,7 @@ class MimiTrainer(nn.Module):
                             x = x.unsqueeze(1)
 
                             inputs = self.feature_extractor(raw_audio=x,
-                                                            sampling_rate=self.feature_extractor.sampling_rate,
+                                                            sampling_rate=24000,
                                                             return_tensors='pt')
                             feature, x_hat, enc_past_kv, dec_past_kv = self.generator(inputs['input_values'])
 
