@@ -35,8 +35,8 @@ setup(
     python_requires=REQUIRES_PYTHON,
     url=URL,
     # Update package names here:
-    packages=['MimiTrainer', 'MimiTrainer.quantization', 'MimiTrainer.modules', 'MimiTrainer.trainer'],
-    install_requires=['numpy', 'torch', 'torchaudio', 'einops', 'scipy', 'huggingface-hub', 'soundfile', 'matplotlib', 'lion_pytorch', 'accelerate'],
+    packages=['mimitrainer', 'mimitrainer.quantization', 'mimitrainer.modules', 'mimitrainer.trainer'],
+    install_requires=['numpy', 'torch', 'torchaudio', 'einops', 'scipy', 'huggingface-hub', 'soundfile', 'matplotlib', 'lion_pytorch', 'accelerate', 'transformers'],
     include_package_data=True,
     license='Apache License 2.0',
     classifiers=[
