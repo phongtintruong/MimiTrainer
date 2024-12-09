@@ -331,13 +331,21 @@ class MimiTrainer(nn.Module):
                 tic = time.time()
                 
                 x, semantic_feature = batch
-                x = x.cpu().squeeze().numpy()
-                print(x.shape)
-                # x = x.unsqueeze(1)
+                x_squeezed = x.cpu().squeeze().numpy()
+                x = x.unsqueeze(1)
                 # x = x.squeeze().numpy()
-                inputs = self.feature_extractor(raw_audio=x, sampling_rate=24000, return_tensors='pt').to(self.device)
+                inputs = self.feature_extractor(raw_audio=x_squeezed, sampling_rate=24000, return_tensors='pt').to(self.device)
                 model_outs = self.generator(inputs['input_values'])
                 feature, x_hat = model_outs.audio_codes, model_outs.audio_values
+                print('x')
+                print(x)
+                print(x.shape)
+                print('x_hat')
+                print(x_hat)
+                print(x_hat.shape)
+                print('feature')
+                print(feature)
+                print(feature.shape)
                 
                 # Discriminators
                 self.optim_d.zero_grad()
@@ -390,16 +398,25 @@ class MimiTrainer(nn.Module):
                     with torch.inference_mode():
                         for i, batch in tqdm(enumerate(self.valid_dl)):                       
                             x, semantic_feature = batch
-                            x = x.cpu().squeeze().numpy()
-                            print(x.shape)
-                            # x = x.unsqueeze(1)
+                            x_squeezed = x.cpu().squeeze().numpy()
+                            # print(x.shape)
+                            x = x.unsqueeze(1)
                             # x = x.squeeze().numpy()
 
-                            inputs = self.feature_extractor(raw_audio=x,
+                            inputs = self.feature_extractor(raw_audio=x_squeezed,
                                                             sampling_rate=24000,
                                                             return_tensors='pt').to(self.device)
                             model_outs = self.generator(inputs['input_values'])
                             feature, x_hat = model_outs.audio_codes, model_outs.audio_values
+                            print('x')
+                            print(x)
+                            print(x.shape)
+                            print('x_hat')
+                            print(x_hat)
+                            print(x_hat.shape)
+                            print('feature')
+                            print(feature)
+                            print(feature.shape)
 
                             mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
                             total_mel_error += mel_error
