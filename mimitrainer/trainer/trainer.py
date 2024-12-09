@@ -19,7 +19,7 @@ import time
 from tqdm import tqdm
 from accelerate import Accelerator, DistributedType, DistributedDataParallelKwargs, DataLoaderConfiguration
 from transformers import AutoFeatureExtractor, PreTrainedModel
-from transformers.feature_extraction_utils import FeatureExtractorMixin
+# from transformers.feature_extraction_utils import FeatureExtractorMixin
 import torchaudio
 from typing import Union, Dict, Any  # Import Dict and Any
 
@@ -63,7 +63,7 @@ class MimiTrainer(nn.Module):
     def __init__(
         self,
         generator: PreTrainedModel,
-        feature_extractor: Union[FeatureExtractorMixin, AutoFeatureExtractor],
+        feature_extractor: Any,
         discriminators: dict,
         cfg,
         accelerate_kwargs: dict = dict(),
