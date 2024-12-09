@@ -336,7 +336,8 @@ class MimiTrainer(nn.Module):
                 # x = x.unsqueeze(1)
                 # x = x.squeeze().numpy()
                 inputs = self.feature_extractor(raw_audio=x, sampling_rate=24000, return_tensors='pt').to(self.device)
-                feature, x_hat, enc_past_kv, dec_past_kv = self.generator(inputs['input_values'])
+                model_outs = self.generator(inputs['input_values'])
+                feature, x_hat = model_outs.audio_codes, model_outs.audio_values
                 
                 # Discriminators
                 self.optim_d.zero_grad()
@@ -397,7 +398,8 @@ class MimiTrainer(nn.Module):
                             inputs = self.feature_extractor(raw_audio=x,
                                                             sampling_rate=24000,
                                                             return_tensors='pt').to(self.device)
-                            feature, x_hat, enc_past_kv, dec_past_kv = self.generator(inputs['input_values'])
+                            model_outs = self.generator(inputs['input_values'])
+                            feature, x_hat = model_outs.audio_codes, model_outs.audio_values
 
                             mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
                             total_mel_error += mel_error
