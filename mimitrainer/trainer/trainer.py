@@ -82,7 +82,7 @@ class MimiTrainer(nn.Module):
         self.epochs = cfg.get("epochs")
         self.num_warmup_steps = cfg.get("num_warmup_steps")
         self.batch_size = cfg.get("batch_size")
-        self.sample_rate = self.feature_extractor.sampling_rate
+        self.sample_rate = 24000
         self.showpiece_num = cfg.get('showpiece_num', 8)
         project_name = 'MimiTrainer'
         
