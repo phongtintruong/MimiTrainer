@@ -34,8 +34,8 @@
     "valid_files":"dev_file_list.txt",
     "results_folder": "Log/spt_base",
     "sample_rate": 16000,
-    "batch_size": 6,
-    "epochs":10,
+    "batch_size": 1,
+    "epochs":5,
     "learning_rate": 1e-4,
     "intial_learning_rate":1e-4,
     "num_warmup_steps":0,
@@ -46,9 +46,9 @@
     "segment_size": 48000,
     "wd": 0,
     "num_workers": 8,
-    "log_steps": 100,
-    "stdout_steps": 10,
-    "save_model_steps": 2500,
+    "log_steps": 2,
+    "stdout_steps": 2,
+    "save_model_steps": 4,
     "num_ckpt_keep": 6,
     "showpiece_num": 8
 }
