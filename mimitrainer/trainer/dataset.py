@@ -4,6 +4,7 @@ import torchaudio
 import random
 import torch
 import numpy as np
+import torchaudio.transforms as T
 
 
 def collate_fn(data):
