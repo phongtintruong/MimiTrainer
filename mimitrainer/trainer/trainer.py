@@ -331,9 +331,11 @@ class MimiTrainer(nn.Module):
                 tic = time.time()
                 
                 x, semantic_feature = batch
+                print(x.shape)
+                x = x.cpu()
                 # x = x.unsqueeze(1)
                 # x = x.squeeze().numpy()
-                inputs = self.feature_extractor(raw_audio=x, sampling_rate=24000, return_tensors='pt')
+                inputs = self.feature_extractor(raw_audio=x, sampling_rate=24000, return_tensors='pt').to(self.device)
                 feature, x_hat, enc_past_kv, dec_past_kv = self.generator(inputs['input_values'])
                 
                 # Discriminators
@@ -387,12 +389,14 @@ class MimiTrainer(nn.Module):
                     with torch.inference_mode():
                         for i, batch in tqdm(enumerate(self.valid_dl)):                       
                             x, semantic_feature = batch
+                            print(x.shape)
                             # x = x.unsqueeze(1)
                             # x = x.squeeze().numpy()
+                            x = x.cpu()
 
                             inputs = self.feature_extractor(raw_audio=x,
                                                             sampling_rate=24000,
-                                                            return_tensors='pt')
+                                                            return_tensors='pt').to(self.device)
                             feature, x_hat, enc_past_kv, dec_past_kv = self.generator(inputs['input_values'])
 
                             mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
