@@ -331,7 +331,7 @@ class MimiTrainer(nn.Module):
                 tic = time.time()
                 
                 x, semantic_feature = batch
-                x = x.squeeze().numpy()
+                x = x.cpu().squeeze().numpy()
                 print(x.shape)
                 # x = x.unsqueeze(1)
                 # x = x.squeeze().numpy()
@@ -389,7 +389,7 @@ class MimiTrainer(nn.Module):
                     with torch.inference_mode():
                         for i, batch in tqdm(enumerate(self.valid_dl)):                       
                             x, semantic_feature = batch
-                            x = x.squeeze().numpy()
+                            x = x.cpu().squeeze().numpy()
                             print(x.shape)
                             # x = x.unsqueeze(1)
                             # x = x.squeeze().numpy()
