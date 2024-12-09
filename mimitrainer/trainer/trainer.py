@@ -331,8 +331,8 @@ class MimiTrainer(nn.Module):
                 tic = time.time()
                 
                 x, semantic_feature = batch
+                x = x.squeeze().numpy()
                 print(x.shape)
-                x = x.cpu()
                 # x = x.unsqueeze(1)
                 # x = x.squeeze().numpy()
                 inputs = self.feature_extractor(raw_audio=x, sampling_rate=24000, return_tensors='pt').to(self.device)
@@ -389,10 +389,10 @@ class MimiTrainer(nn.Module):
                     with torch.inference_mode():
                         for i, batch in tqdm(enumerate(self.valid_dl)):                       
                             x, semantic_feature = batch
+                            x = x.squeeze().numpy()
                             print(x.shape)
                             # x = x.unsqueeze(1)
                             # x = x.squeeze().numpy()
-                            x = x.cpu()
 
                             inputs = self.feature_extractor(raw_audio=x,
                                                             sampling_rate=24000,
