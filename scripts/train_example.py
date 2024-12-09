@@ -1,9 +1,9 @@
 # from speechtokenizer import SpeechTokenizer, SpeechTokenizerTrainer
-from discriminators import MultiPeriodDiscriminator, MultiScaleDiscriminator, MultiScaleSTFTDiscriminator
+from mimitrainer.discriminators import MultiPeriodDiscriminator, MultiScaleDiscriminator, MultiScaleSTFTDiscriminator
 import json
 import argparse
 from transformers import MimiModel, AutoFeatureExtractor
-from trainer import MimiTrainer
+from mimitrainer.trainer import MimiTrainer
 
 
 
