@@ -64,7 +64,7 @@ class MimiTrainer(nn.Module):
     def __init__(
         self,
         generator: PreTrainedModel,
-        feature_extractor: AutoFeatureExtractor,
+        feature_extractor: EncodecFeatureExtractor,
         discriminators: dict,
         cfg,
         accelerate_kwargs: dict = dict(),
