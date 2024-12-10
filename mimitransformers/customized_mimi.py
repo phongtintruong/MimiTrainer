@@ -161,6 +161,7 @@ class TrainingMimiModel(MimiModel):
         if not return_dict:
             return (
                 audio_values,
+                semantic_token,
                 decoder_past_key_values,
             )
         return TrainingMimiDecoderOutput(audio_values, semantic_token, decoder_past_key_values)
@@ -220,7 +221,7 @@ class TrainingMimiModel(MimiModel):
             decoder_past_key_values = decoder_outputs[1]
 
         if not return_dict:
-            return (audio_codes, audio_values, encoder_past_key_values, decoder_past_key_values)
+            return (audio_codes, audio_values, semantic_token, encoder_past_key_values, decoder_past_key_values)
 
         return TrainingMimiOutput(
             audio_codes=audio_codes,
