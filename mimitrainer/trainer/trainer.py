@@ -336,7 +336,8 @@ class MimiTrainer(nn.Module):
                 # x = x.squeeze().numpy()
                 inputs = self.feature_extractor(raw_audio=x_squeezed, sampling_rate=24000, return_tensors='pt').to(self.device)
                 model_outs = self.generator(inputs['input_values'])
-                feature, x_hat = model_outs.audio_codes, model_outs.audio_values
+                feature, x_hat = model_outs.audio_codes[:, :1], model_outs.audio_values
+                semantic_token = feature[0, :1, 0]
                 print('x')
                 print(x)
                 print(x.shape)
@@ -346,6 +347,10 @@ class MimiTrainer(nn.Module):
                 print('feature')
                 print(feature)
                 print(feature.shape)
+                print('semantic')
+                print(semantic_token)
+                print(semantic_token.shape)
+                print(len(semantic_token))
                 
                 # Discriminators
                 self.optim_d.zero_grad()
@@ -407,7 +412,8 @@ class MimiTrainer(nn.Module):
                                                             sampling_rate=24000,
                                                             return_tensors='pt').to(self.device)
                             model_outs = self.generator(inputs['input_values'])
-                            feature, x_hat = model_outs.audio_codes, model_outs.audio_values
+                            feature, x_hat = model_outs.audio_codes[:, :1], model_outs.audio_values
+                            semantic_token = feature[0, :1, 0]
                             print('x')
                             print(x)
                             print(x.shape)
@@ -417,6 +423,10 @@ class MimiTrainer(nn.Module):
                             print('feature')
                             print(feature)
                             print(feature.shape)
+                            print('semantic')
+                            print(semantic_token)
+                            print(semantic_token.shape)
+                            print(len(semantic_token))
 
                             mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
                             total_mel_error += mel_error
