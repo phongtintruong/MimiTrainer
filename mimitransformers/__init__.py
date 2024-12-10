@@ -11,47 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# You can still keep the type checking imports if you use a type checker
 from typing import TYPE_CHECKING
 
-from ...utils import (
-    OptionalDependencyNotAvailable,
-    _LazyModule,
-    is_torch_available,
-)
-
-
-_import_structure = {
-    "configuration_mimi": ["MimiConfig"],
-}
-
-try:
-    if not is_torch_available():
-        raise OptionalDependencyNotAvailable()
-except OptionalDependencyNotAvailable:
-    pass
-else:
-    _import_structure["modeling_mimi"] = [
-        "MimiModel",
-        "MimiPreTrainedModel",
-    ]
-
 if TYPE_CHECKING:
-    from .configuration_mimi import (
-        MimiConfig,
-    )
+    from .configuration_mimi import MimiConfig
 
-    try:
-        if not is_torch_available():
-            raise OptionalDependencyNotAvailable()
-    except OptionalDependencyNotAvailable:
-        pass
-    else:
-        from .modeling_mimi import (
-            MimiModel,
-            MimiPreTrainedModel,
-        )
+# Direct import of MimiModel
+from .modeling_mimi import MimiModel  # Assuming modeling_mimi.py is in the same directory
 
-else:
-    import sys
+# You might need other classes from modeling_mimi.py, add them here:
+# from .modeling_mimi import MimiPreTrainedModel
 
-    sys.modules[__name__] = _LazyModule(__name__, globals()["__file__"], _import_structure, module_spec=__spec__)
+# If you're using configuration_mimi.py
+# from .configuration_mimi import MimiConfig
