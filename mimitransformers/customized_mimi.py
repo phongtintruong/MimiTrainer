@@ -160,13 +160,25 @@ class TrainingMimiModel(MimiModel):
         if padding_mask is not None and padding_mask.shape[-1] < audio_values.shape[-1]:
             audio_values = audio_values[..., : padding_mask.shape[-1]]
 
+        # print('check semantic_token from decode')
+        # print(semantic_token)
+
+        # print('check decoder_past_key_values from decode')
+        # print(decoder_past_key_values)
+
         if not return_dict:
             return (
                 audio_values,
                 semantic_token,
                 decoder_past_key_values,
             )
-        return TrainingMimiDecoderOutput(audio_values, semantic_token, decoder_past_key_values)
+        # return TrainingMimiDecoderOutput(audio_values, semantic_token, decoder_past_key_values)
+
+        return TrainingMimiDecoderOutput(
+            audio_values=audio_values,
+            semantic_token=semantic_token,
+            decoder_past_key_values=decoder_past_key_values,
+        )
 
     def forward(
         self,
@@ -216,19 +228,20 @@ class TrainingMimiModel(MimiModel):
                 encoder_past_key_values = encoder_outputs[1]
 
         decoder_outputs = self.decode(audio_codes, padding_mask, decoder_past_key_values, return_dict=return_dict)
+        # print(decoder_outputs)
 
         if return_dict:
-            print(return_dict)
+            # print(return_dict)
             audio_values = decoder_outputs.audio_values
             semantic_token = decoder_outputs.semantic_token
             decoder_past_key_values = decoder_outputs.decoder_past_key_values
-            print(semantic_token)
+            # print(semantic_token)
         else:
-            print(return_dict)
+            # print(return_dict)
             audio_values, semantic_token, decoder_past_key_values = decoder_outputs
-            print(semantic_token)
+            # print(semantic_token)
 
-        print(semantic_token)
+        # print(semantic_token)
 
         if not return_dict:
             return (audio_codes, audio_values, semantic_token, encoder_past_key_values, decoder_past_key_values)
