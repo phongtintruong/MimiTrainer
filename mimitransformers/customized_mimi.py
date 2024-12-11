@@ -213,12 +213,17 @@ class TrainingMimiModel(MimiModel):
             elif len(encoder_outputs) > 1:
                 encoder_past_key_values = encoder_outputs[1]
 
-        decoder_outputs, semantic_token = self.decode(audio_codes, padding_mask, decoder_past_key_values, return_dict=return_dict)
-        audio_values = decoder_outputs[0]
+        decoder_outputs = self.decode(audio_codes, padding_mask, decoder_past_key_values, return_dict=return_dict)
+
         if return_dict:
+            audio_values = decoder_outputs.get("audio_values")
+            semantic_token = decoder_outputs.get("semantic_token")
             decoder_past_key_values = decoder_outputs.get("past_key_values")
-        elif len(decoder_outputs) > 1:
-            decoder_past_key_values = decoder_outputs[1]
+        else:
+            audio_values = decoder_outputs[0]
+            semantic_token = decoder_outputs[1]
+            if len(decoder_outputs) > 2:
+                decoder_past_key_values = decoder_outputs[2]
 
         if not return_dict:
             return (audio_codes, audio_values, semantic_token, encoder_past_key_values, decoder_past_key_values)
