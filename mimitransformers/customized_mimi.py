@@ -101,6 +101,7 @@ class TrainingMimiModel(MimiModel):
         past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         return_dict: Optional[bool] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[Union[Cache, List[torch.FloatTensor]]]]:
+        return_dict = return_dict if return_dict is not None else self.config.return_dict
         quantization_outputs = self.quantizer.decode(codes)
         embeddings = quantization_outputs['quantized_combined']
         semantic_token = quantization_outputs['quantized_semantic']
@@ -216,9 +217,9 @@ class TrainingMimiModel(MimiModel):
         decoder_outputs = self.decode(audio_codes, padding_mask, decoder_past_key_values, return_dict=return_dict)
 
         if return_dict:
-            audio_values = decoder_outputs.get("audio_values")
-            semantic_token = decoder_outputs.get("semantic_token")
-            decoder_past_key_values = decoder_outputs.get("past_key_values")
+            audio_values = decoder_outputs.audio_values
+            semantic_token = decoder_outputs.semantic_token
+            decoder_past_key_values = decoder_outputs.decoder_past_key_values
         else:
             audio_values = decoder_outputs[0]
             semantic_token = decoder_outputs[1]
