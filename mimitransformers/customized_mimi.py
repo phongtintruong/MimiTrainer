@@ -100,7 +100,7 @@ class TrainingMimiModel(MimiModel):
         codes: torch.Tensor,
         past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         return_dict: Optional[bool] = None,
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[Union[Cache, List[torch.FloatTensor]]]]:
         quantization_outputs = self.quantizer.decode(codes)
         embeddings = quantization_outputs['quantized_combined']
         semantic_token = quantization_outputs['quantized_semantic']
@@ -123,7 +123,7 @@ class TrainingMimiModel(MimiModel):
         padding_mask: Optional[torch.Tensor] = None,
         decoder_past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[torch.Tensor, torch.Tensor], TrainingMimiDecoderOutput]:
+    ) -> Union[Tuple[torch.Tensor, torch.Tensor, torch.Tensor], TrainingMimiDecoderOutput]:
         """
         Decodes the given frames into an output audio waveform.
 
@@ -175,7 +175,7 @@ class TrainingMimiModel(MimiModel):
         encoder_past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         decoder_past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[torch.Tensor, torch.Tensor], TrainingMimiOutput]:
+    ) -> Union[Tuple[torch.Tensor, torch.Tensor, torch.Tensor], TrainingMimiOutput]:
         r"""
         Returns:
 
