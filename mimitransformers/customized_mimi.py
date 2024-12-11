@@ -91,6 +91,7 @@ class TrainingMimiSplitResidualVectorQuantizer(MimiSplitResidualVectorQuantizer)
 class TrainingMimiModel(MimiModel):
     def __init__(self, config):
         super().__init__(config)
+        print('hello TrainingMimiModel')
 
         # Replace the quantizer with the updated version
         self.quantizer = TrainingMimiSplitResidualVectorQuantizer(config)
@@ -235,11 +236,3 @@ class TrainingMimiModel(MimiModel):
             encoder_past_key_values=encoder_past_key_values,
             decoder_past_key_values=decoder_past_key_values,
         )
-
-
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
-        # Load pretrained weights and configuration from MimiModel
-        model = super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
-        # Initialize the subclass instance
-        return cls(model.config)
