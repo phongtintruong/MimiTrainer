@@ -221,10 +221,7 @@ class TrainingMimiModel(MimiModel):
             semantic_token = decoder_outputs.semantic_token
             decoder_past_key_values = decoder_outputs.decoder_past_key_values
         else:
-            audio_values = decoder_outputs[0]
-            semantic_token = decoder_outputs[1]
-            if len(decoder_outputs) > 2:
-                decoder_past_key_values = decoder_outputs[2]
+            audio_values, semantic_token, decoder_past_key_values = decoder_outputs
 
         print(semantic_token)
 
@@ -238,3 +235,11 @@ class TrainingMimiModel(MimiModel):
             encoder_past_key_values=encoder_past_key_values,
             decoder_past_key_values=decoder_past_key_values,
         )
+
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        # Load pretrained weights and configuration from MimiModel
+        model = super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
+        # Initialize the subclass instance
+        return cls(model.config)
