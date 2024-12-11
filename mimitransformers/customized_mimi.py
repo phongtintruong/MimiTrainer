@@ -225,6 +225,8 @@ class TrainingMimiModel(MimiModel):
             if len(decoder_outputs) > 2:
                 decoder_past_key_values = decoder_outputs[2]
 
+        print(semantic_token)
+
         if not return_dict:
             return (audio_codes, audio_values, semantic_token, encoder_past_key_values, decoder_past_key_values)
 
