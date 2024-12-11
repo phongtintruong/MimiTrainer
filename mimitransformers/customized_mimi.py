@@ -218,11 +218,15 @@ class TrainingMimiModel(MimiModel):
         decoder_outputs = self.decode(audio_codes, padding_mask, decoder_past_key_values, return_dict=return_dict)
 
         if return_dict:
+            print(return_dict)
             audio_values = decoder_outputs.audio_values
             semantic_token = decoder_outputs.semantic_token
             decoder_past_key_values = decoder_outputs.decoder_past_key_values
+            print(semantic_token)
         else:
+            print(return_dict)
             audio_values, semantic_token, decoder_past_key_values = decoder_outputs
+            print(semantic_token)
 
         print(semantic_token)
 
