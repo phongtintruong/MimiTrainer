@@ -362,7 +362,14 @@ class MimiTrainer(nn.Module):
                 with torch.no_grad():
                     outputs_teacher = self.teacher(x_teacher)
                 semantic_feature = outputs_teacher.last_hidden_state
-                semantic_feature = nn.functional.avg_pool1d(semantic_feature.transpose(1, 2), kernel_size=8,
+                print('org teacher_semantic token')
+                print(semantic_feature.shape)
+                semantic_feature = nn.functional.pad(
+                    semantic_feature.transpose(1, 2),  # Transpose to [Batch, Seq Length, Channels]
+                    pad=(4, 4),  # Symmetric padding
+                    mode="reflect"
+                )
+                semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8,
                                                             stride=4).transpose(1, 2)
                 print('teacher semantic token')
                 print(semantic_feature)
