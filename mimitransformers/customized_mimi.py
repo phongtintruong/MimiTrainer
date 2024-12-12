@@ -243,6 +243,8 @@ class TrainingMimiModel(MimiModel):
 
         # print(semantic_token)
 
+        semantic_token = semantic_token.transpose(1, 2)
+
         if not return_dict:
             return (audio_codes, audio_values, semantic_token, encoder_past_key_values, decoder_past_key_values)
 

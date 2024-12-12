@@ -364,6 +364,9 @@ class MimiTrainer(nn.Module):
                 semantic_feature = outputs_teacher.last_hidden_state
                 semantic_feature = nn.functional.avg_pool1d(semantic_feature.transpose(1, 2), kernel_size=8,
                                                             stride=4).transpose(1, 2)
+                print('teacher semantic token')
+                print(semantic_feature)
+                print(semantic_feature.shape)
                 model_outs = self.generator(x)
                 discretes, x_hat, feature = model_outs.audio_codes, model_outs.audio_values, model_outs.semantic_token
                 print('x_hat')
