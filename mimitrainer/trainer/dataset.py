@@ -147,36 +147,44 @@ class DistillDataset(Dataset):
 
         # print(f"Item {idx}: inputs_student.shape = {inputs_student.shape}, inputs_teacher.shape = {inputs_teacher.shape}")
 
-        return inputs_student, inputs_teacher
+        return waveform_student, inputs_student, inputs_teacher
 
 
 def collate_fn(data):
     """
-    Collate function to pad student and teacher inputs.
+    Collate function to pad waveforms, student inputs, and teacher inputs.
 
     Args:
-        data (list): List of (inputs_student, inputs_teacher) tuples.
+        data (list): List of (waveform_student, inputs_student, inputs_teacher) tuples.
 
     Returns:
-        tuple: Padded student and teacher inputs.
+        tuple: Padded student waveforms, student inputs, and teacher inputs.
     """
-    student_inputs, teacher_inputs = zip(*data)
+    waveforms, student_inputs, teacher_inputs = zip(*data)
 
-    # Teacher inputs: pad along the time dimension
+    # Pad waveforms along the time dimension
+    waveforms_padded = pad_sequence(
+        [waveform.squeeze(0) for waveform in waveforms],  # [1, seq_len] -> [seq_len]
+        batch_first=True,
+        padding_value=0.0
+    ).unsqueeze(1)
+
+    # Pad teacher inputs along the time dimension
     teacher_inputs_padded = pad_sequence(
         [x.squeeze(0) for x in teacher_inputs],  # [1, seq_len] -> [seq_len]
         batch_first=True,
         padding_value=0.0
     )  # -> [batch_size, max_seq_len_teacher]
 
-    # Student inputs: pad along the time dimension
+    # Pad student inputs along the time dimension
     student_inputs_padded = pad_sequence(
         [x.squeeze(0).squeeze(0) for x in student_inputs],  # [1, 1, seq_len] -> [seq_len]
         batch_first=True,
         padding_value=0.0
     ).unsqueeze(1)  # Add back channel dimension -> [batch_size, 1, max_seq_len_student]
 
-    return student_inputs_padded, teacher_inputs_padded
+    return waveforms_padded, student_inputs_padded, teacher_inputs_padded
+
 
 def get_dataloader(dataset, batch_size, num_workers=4, shuffle=True, drop_last=True):  # Add drop_last parameter
     return DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, shuffle=shuffle, drop_last=drop_last, collate_fn=collate_fn)

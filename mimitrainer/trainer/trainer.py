@@ -350,17 +350,21 @@ class MimiTrainer(nn.Module):
 
                 tic = time.time()
 
-                x, x_teacher = batch
+                x, inputs_student, inputs_teacher = batch
                 x = x.to(self.device)
-                x_teacher = x_teacher.to(self.device)
+                inputs_student = inputs_student.to(self.device)
+                inputs_teacher = inputs_teacher.to(self.device)
                 print('x')
                 print(x)
                 print(x.shape)
-                print('x_teacher')
-                print(x_teacher)
-                print(x_teacher.shape)
+                print('inputs_student')
+                print(inputs_student)
+                print(inputs_student.shape)
+                print('inputs_teacher')
+                print(inputs_teacher)
+                print(inputs_teacher.shape)
                 with torch.no_grad():
-                    outputs_teacher = self.teacher(x_teacher)
+                    outputs_teacher = self.teacher(inputs_teacher)
                 semantic_feature = outputs_teacher.last_hidden_state
                 print('org teacher_semantic token')
                 print(semantic_feature.shape)
@@ -374,7 +378,7 @@ class MimiTrainer(nn.Module):
                 print('teacher semantic token')
                 print(semantic_feature)
                 print(semantic_feature.shape)
-                model_outs = self.generator(x)
+                model_outs = self.generator(inputs_student)
                 discretes, x_hat, feature = model_outs.audio_codes, model_outs.audio_values, model_outs.semantic_token
                 print('x_hat')
                 print(x_hat)
@@ -441,29 +445,41 @@ class MimiTrainer(nn.Module):
                     self.generator.eval()
                     with torch.inference_mode():
                         for i, batch in tqdm(enumerate(self.valid_dl)):
-                            x, x_teacher = batch
+                            x, inputs_student, inputs_teacher = batch
                             x = x.to(self.device)
-                            x_teacher = x_teacher.to(self.device)
+                            inputs_student = inputs_student.to(self.device)
+                            inputs_teacher = inputs_teacher.to(self.device)
                             print('x')
                             print(x)
                             print(x.shape)
-                            print('x_teacher')
-                            print(x_teacher)
-                            print(x_teacher.shape)
+                            print('inputs_student')
+                            print(inputs_student)
+                            print(inputs_student.shape)
+                            print('inputs_teacher')
+                            print(inputs_teacher)
+                            print(inputs_teacher.shape)
                             with torch.no_grad():
-                                outputs_teacher = self.teacher(x_teacher)
+                                outputs_teacher = self.teacher(inputs_teacher)
                             semantic_feature = outputs_teacher.last_hidden_state
-                            semantic_feature = nn.functional.avg_pool1d(semantic_feature.transpose(1, 2), kernel_size=8,
+                            print('org teacher_semantic token')
+                            print(semantic_feature.shape)
+                            semantic_feature = nn.functional.pad(
+                                semantic_feature.transpose(1, 2),  # Transpose to [Batch, Seq Length, Channels]
+                                pad=(4, 4),  # Symmetric padding
+                                mode="reflect"
+                            )
+                            semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8,
                                                                         stride=4).transpose(1, 2)
 
                             # print(x.shape)
                             # x = x.unsqueeze(1)
                             # x = x.squeeze().numpy()
 
-
-                            model_outs = self.generator(x)
+                            print('teacher semantic token')
+                            print(semantic_feature)
+                            print(semantic_feature.shape)
+                            model_outs = self.generator(inputs_student)
                             discretes, x_hat, feature = model_outs.audio_codes, model_outs.audio_values, model_outs.semantic_token
-
                             print('x_hat')
                             print(x_hat)
                             print(x_hat.shape)
