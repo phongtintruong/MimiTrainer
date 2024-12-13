@@ -511,6 +511,7 @@ class MimiTrainer(nn.Module):
                                 x_hat_spec = mel_spectrogram(x_hat.squeeze(1), **self.mel_kwargs)
                                 self.log({f'generate/x_hat_spec_{i}': plot_spectrogram(x_hat_spec[0].cpu().numpy())},
                                          type='figure', step=steps)
+                            torch.cuda.empty_cache()
                         if not self.plot_gt_once:
                             self.plot_gt_once = True
                         self.print(
