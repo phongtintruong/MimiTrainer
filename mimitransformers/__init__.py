@@ -1,1 +1,1 @@
-from .customized_mimi import TrainingMimiModel
+from .customized_mimi import TrainingMimiModel, TrainingMimiProjectorModel
