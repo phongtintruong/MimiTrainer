@@ -81,7 +81,7 @@ class MimiTrainer(nn.Module):
         super().__init__()
         ddp_kwargs = DistributedDataParallelKwargs()
         torch.manual_seed(cfg.get('seed'))
-        split_batches = cfg.get("split_batches", False)
+        split_batches = cfg.get("split_batches", True)
         self.log_steps = cfg.get('log_steps')
         self.stdout_steps = cfg.get('stdout_steps')
         self.save_model_steps = cfg.get('save_model_steps')
@@ -354,20 +354,20 @@ class MimiTrainer(nn.Module):
                 x = x.to(self.device)
                 inputs_student = inputs_student.to(self.device)
                 inputs_teacher = inputs_teacher.to(self.device)
-                print('x')
-                print(x)
-                print(x.shape)
-                print('inputs_student')
-                print(inputs_student)
-                print(inputs_student.shape)
-                print('inputs_teacher')
-                print(inputs_teacher)
-                print(inputs_teacher.shape)
+                # print('x')
+                # print(x)
+                # print(x.shape)
+                # print('inputs_student')
+                # print(inputs_student)
+                # print(inputs_student.shape)
+                # print('inputs_teacher')
+                # print(inputs_teacher)
+                # print(inputs_teacher.shape)
                 with torch.no_grad():
                     outputs_teacher = self.teacher(inputs_teacher)
                 semantic_feature = outputs_teacher.last_hidden_state
-                print('org teacher_semantic token')
-                print(semantic_feature.shape)
+                # print('org teacher_semantic token')
+                # print(semantic_feature.shape)
                 semantic_feature = nn.functional.pad(
                     semantic_feature.transpose(1, 2),  # Transpose to [Batch, Seq Length, Channels]
                     pad=(4, 4),  # Symmetric padding
@@ -375,21 +375,21 @@ class MimiTrainer(nn.Module):
                 )
                 semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8,
                                                             stride=4).transpose(1, 2)
-                print('teacher semantic token')
-                print(semantic_feature)
-                print(semantic_feature.shape)
+                # print('teacher semantic token')
+                # print(semantic_feature)
+                # print(semantic_feature.shape)
                 model_outs = self.generator(inputs_student)
                 discretes, x_hat, feature = model_outs.audio_codes, model_outs.audio_values, model_outs.semantic_token
-                print('x_hat')
-                print(x_hat)
-                print(x_hat.shape)
-                print('feature')
-                print(feature)
-                print(feature.shape)
-                print(len(feature))
-                print('discretes')
-                print(discretes)
-                print(discretes.shape)
+                # print('x_hat')
+                # print(x_hat)
+                # print(x_hat.shape)
+                # print('feature')
+                # print(feature)
+                # print(feature.shape)
+                # print(len(feature))
+                # print('discretes')
+                # print(discretes)
+                # print(discretes.shape)
 
                 # Discriminators
                 self.optim_d.zero_grad()
@@ -413,6 +413,8 @@ class MimiTrainer(nn.Module):
                 # if exists(self.max_grad_norm):
                 #     self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 self.optim_g.step()
+
+                torch.cuda.empty_cache()
 
                 step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
                 # self.accelerator.wait_for_everyone()
@@ -449,20 +451,20 @@ class MimiTrainer(nn.Module):
                             x = x.to(self.device)
                             inputs_student = inputs_student.to(self.device)
                             inputs_teacher = inputs_teacher.to(self.device)
-                            print('x')
-                            print(x)
-                            print(x.shape)
-                            print('inputs_student')
-                            print(inputs_student)
-                            print(inputs_student.shape)
-                            print('inputs_teacher')
-                            print(inputs_teacher)
-                            print(inputs_teacher.shape)
+                            # print('x')
+                            # print(x)
+                            # print(x.shape)
+                            # print('inputs_student')
+                            # print(inputs_student)
+                            # print(inputs_student.shape)
+                            # print('inputs_teacher')
+                            # print(inputs_teacher)
+                            # print(inputs_teacher.shape)
                             with torch.no_grad():
                                 outputs_teacher = self.teacher(inputs_teacher)
                             semantic_feature = outputs_teacher.last_hidden_state
-                            print('org teacher_semantic token')
-                            print(semantic_feature.shape)
+                            # print('org teacher_semantic token')
+                            # print(semantic_feature.shape)
                             semantic_feature = nn.functional.pad(
                                 semantic_feature.transpose(1, 2),  # Transpose to [Batch, Seq Length, Channels]
                                 pad=(4, 4),  # Symmetric padding
@@ -475,21 +477,21 @@ class MimiTrainer(nn.Module):
                             # x = x.unsqueeze(1)
                             # x = x.squeeze().numpy()
 
-                            print('teacher semantic token')
-                            print(semantic_feature)
-                            print(semantic_feature.shape)
+                            # print('teacher semantic token')
+                            # print(semantic_feature)
+                            # print(semantic_feature.shape)
                             model_outs = self.generator(inputs_student)
                             discretes, x_hat, feature = model_outs.audio_codes, model_outs.audio_values, model_outs.semantic_token
-                            print('x_hat')
-                            print(x_hat)
-                            print(x_hat.shape)
-                            print('feature')
-                            print(feature)
-                            print(feature.shape)
-                            print(len(feature))
-                            print('discretes')
-                            print(discretes)
-                            print(discretes.shape)
+                            # print('x_hat')
+                            # print(x_hat)
+                            # print(x_hat.shape)
+                            # print('feature')
+                            # print(feature)
+                            # print(feature.shape)
+                            # print(len(feature))
+                            # print('discretes')
+                            # print(discretes)
+                            # print(discretes.shape)
 
                             mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
                             total_mel_error += mel_error
@@ -536,6 +538,8 @@ class MimiTrainer(nn.Module):
                     self.scheduler_d.step()
                     self.scheduler_g.step()
                     lr = self.scheduler_g.get_last_lr()[0]
+
+                torch.cuda.empty_cache()
 
         self.print('training complete')
 
