@@ -66,6 +66,8 @@ class MimiTrainer(nn.Module):
     @beartype
     def __init__(
             self,
+            epochs,
+            batch_size,
             train_audio_path,
             val_audio_path,
             generator: PreTrainedModel,
@@ -88,9 +90,11 @@ class MimiTrainer(nn.Module):
         results_folder = cfg.get('results_folder')
         self.results_folder = Path(results_folder)
         self.num_ckpt_keep = cfg.get("num_ckpt_keep")
-        self.epochs = cfg.get("epochs")
+        # self.epochs = cfg.get("epochs")
+        self.epochs = epochs
         self.num_warmup_steps = cfg.get("num_warmup_steps")
-        self.batch_size = cfg.get("batch_size")
+        # self.batch_size = cfg.get("batch_size")
+        self.batch_size = batch_size
         self.sample_rate = 24000
         self.showpiece_num = cfg.get('showpiece_num', 8)
         project_name = 'MimiTrainer'
