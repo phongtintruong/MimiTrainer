@@ -189,7 +189,7 @@ class MimiTrainer(nn.Module):
         num_workers = cfg.get("num_workers")
         self.dl = get_dataloader(self.ds, batch_size=self.batch_size, shuffle=True, drop_last=drop_last,
                                  num_workers=num_workers)
-        self.valid_dl = get_dataloader(self.valid_ds, batch_size=1, shuffle=False, drop_last=False, num_workers=1)
+        self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=False, drop_last=False, num_workers=num_workers)
 
         # lr
         self.lr = cfg.get("learning_rate")
