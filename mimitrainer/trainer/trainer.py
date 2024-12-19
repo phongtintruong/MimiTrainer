@@ -24,29 +24,24 @@ from transformers import EncodecFeatureExtractor, AutoProcessor, Wav2Vec2Process
 import torchaudio
 from typing import Union, Dict, Any  # Import Dict and Any
 
-
 # helpers
 
 def exists(val):
     return val is not None
-
 
 def cycle(dl):
     while True:
         for data in dl:
             yield data
 
-
 def cast_tuple(t):
     return t if isinstance(t, (tuple, list)) else (t,)
-
 
 def accum_log(log, new_logs):
     for key, new_value in new_logs.items():
         old_value = log.get(key, 0.)
         log[key] = old_value + new_value
     return log
-
 
 def checkpoint_num_steps(checkpoint_path):
     """Returns the number of steps trained from a checkpoint based on the filename.
@@ -60,7 +55,6 @@ def checkpoint_num_steps(checkpoint_path):
         return 0
 
     return int(results[-1])
-
 
 class MimiTrainer(nn.Module):
     @beartype
@@ -355,9 +349,9 @@ class MimiTrainer(nn.Module):
                 tic = time.time()
 
                 x, inputs_student, inputs_teacher = batch
-                x = x.to(self.device)
-                inputs_student = inputs_student.to(self.device)
-                inputs_teacher = inputs_teacher.to(self.device)
+                # x = x.to(self.device)
+                # inputs_student = inputs_student.to(self.device)
+                # inputs_teacher = inputs_teacher.to(self.device)
                 # print('x')
                 # print(x)
                 # print(x.shape)
@@ -418,7 +412,9 @@ class MimiTrainer(nn.Module):
                 #     self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 self.optim_g.step()
 
-                torch.cuda.empty_cache()
+                # Remove the detached tensors from the computational graph
+                x = x.detach()
+                x_hat = x_hat.detach()
 
                 step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
                 # self.accelerator.wait_for_everyone()
@@ -452,9 +448,9 @@ class MimiTrainer(nn.Module):
                     with torch.inference_mode():
                         for i, batch in tqdm(enumerate(self.valid_dl)):
                             x, inputs_student, inputs_teacher = batch
-                            x = x.to(self.device)
-                            inputs_student = inputs_student.to(self.device)
-                            inputs_teacher = inputs_teacher.to(self.device)
+                            # x = x.to(self.device)
+                            # inputs_student = inputs_student.to(self.device)
+                            # inputs_teacher = inputs_teacher.to(self.device)
                             # print('x')
                             # print(x)
                             # print(x.shape)
@@ -515,7 +511,9 @@ class MimiTrainer(nn.Module):
                                 x_hat_spec = mel_spectrogram(x_hat.squeeze(1), **self.mel_kwargs)
                                 self.log({f'generate/x_hat_spec_{i}': plot_spectrogram(x_hat_spec[0].cpu().numpy())},
                                          type='figure', step=steps)
-                            torch.cuda.empty_cache()
+                            # Remove the detached tensors from the computational graph
+                            x = x.detach()
+                            x_hat = x_hat.detach()
                         if not self.plot_gt_once:
                             self.plot_gt_once = True
                         self.print(
@@ -529,6 +527,7 @@ class MimiTrainer(nn.Module):
                     self.save(model_path, total_mel_error / num)
                     self.print(f'{steps}: saving model to {str(self.results_folder)}')
                     self.generator.train()
+                    print('back to train')
 
                 # Update lr
                 self.steps += 1
@@ -544,6 +543,24 @@ class MimiTrainer(nn.Module):
                     self.scheduler_g.step()
                     lr = self.scheduler_g.get_last_lr()[0]
 
+                # Explicitly delete to manage memory
+                del x
+                del inputs_student
+                del inputs_teacher
+                del semantic_feature
+                del model_outs
+                del discretes
+                del x_hat
+                del feature
+                del discriminator_outputs
+                del loss_disc_all
+                del loss_recon
+                del loss_mel
+                del loss_feature
+                del loss_adversarial
+                del loss_distill
+                del loss_generator_all
+
                 torch.cuda.empty_cache()
 
         self.print('training complete')
@@ -551,4 +568,3 @@ class MimiTrainer(nn.Module):
     def continue_train(self):
         self.load()
         self.train()
-
