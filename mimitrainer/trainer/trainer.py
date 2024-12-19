@@ -75,7 +75,7 @@ class MimiTrainer(nn.Module):
             accelerate_kwargs: dict = dict(),
     ):
         super().__init__()
-        ddp_kwargs = DistributedDataParallelKwargs()
+        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
         torch.manual_seed(cfg.get('seed'))
         split_batches = cfg.get("split_batches", True)
         self.log_steps = cfg.get('log_steps')
