@@ -183,7 +183,7 @@ class MimiTrainer(nn.Module):
         num_workers = cfg.get("num_workers")
         self.dl = get_dataloader(self.ds, batch_size=self.batch_size, shuffle=True, drop_last=drop_last,
                                  num_workers=num_workers, feature_extractor_student=generator_feature_extractor, feature_extractor_teacher=teacher_feature_extractor, teacher_sampling_rate=teacher_sampling_rate, student_sampling_rate=generator_sampling_rate, max_length_s=max_length_s)
-        self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=False, drop_last=False, num_workers=num_workers, feature_extractor_student=generator_feature_extractor, feature_extractor_teacher=teacher_feature_extractor, teacher_sampling_rate=teacher_sampling_rate, student_sampling_rate=generator_sampling_rate, max_length_s=max_length_s)
+        self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=False, drop_last=False, num_workers=0, feature_extractor_student=generator_feature_extractor, feature_extractor_teacher=teacher_feature_extractor, teacher_sampling_rate=teacher_sampling_rate, student_sampling_rate=generator_sampling_rate, max_length_s=max_length_s)
 
         # lr
         self.lr = cfg.get("learning_rate")
