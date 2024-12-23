@@ -342,17 +342,17 @@ class MimiTrainer(nn.Module):
 
                 tic = time.time()
 
-                inputs_student, inputs_teacher = batch
-                x = inputs_student.squeeze(0)
+                x, inputs_teacher = batch
+                # x = inputs_student.squeeze(0)
                 # x = x.to(self.device)
                 # inputs_student = inputs_student.to(self.device)
                 # inputs_teacher = inputs_teacher.to(self.device)
                 print('x')
                 print(x)
                 print(x.shape)
-                print('inputs_student')
-                print(inputs_student)
-                print(inputs_student.shape)
+                # print('inputs_student')
+                # print(inputs_student)
+                # print(inputs_student.shape)
                 # print('inputs_teacher')
                 # print(inputs_teacher)
                 # print(inputs_teacher.shape)
@@ -371,7 +371,7 @@ class MimiTrainer(nn.Module):
                 # print('teacher semantic token')
                 # print(semantic_feature)
                 # print(semantic_feature.shape)
-                model_outs = self.generator(inputs_student)
+                model_outs = self.generator(x)
                 discretes, x_hat, feature = model_outs.audio_codes, model_outs.audio_values, model_outs.semantic_token
                 # print('x_hat')
                 # print(x_hat)
@@ -442,8 +442,8 @@ class MimiTrainer(nn.Module):
                     self.generator.eval()
                     with torch.inference_mode():
                         for i, batch in tqdm(enumerate(self.valid_dl)):
-                            inputs_student, inputs_teacher = batch
-                            x = inputs_student.squeeze(0)
+                            x, inputs_teacher = batch
+                            # x = inputs_student.squeeze(0)
                             # x = x.to(self.device)
                             # inputs_student = inputs_student.to(self.device)
                             # inputs_teacher = inputs_teacher.to(self.device)
@@ -476,7 +476,7 @@ class MimiTrainer(nn.Module):
                             # print('teacher semantic token')
                             # print(semantic_feature)
                             # print(semantic_feature.shape)
-                            model_outs = self.generator(inputs_student)
+                            model_outs = self.generator(x)
                             discretes, x_hat, feature = model_outs.audio_codes, model_outs.audio_values, model_outs.semantic_token
                             # print('x_hat')
                             # print(x_hat)
@@ -541,7 +541,7 @@ class MimiTrainer(nn.Module):
 
                 # Explicitly delete to manage memory
                 del x
-                del inputs_student
+                # del inputs_student
                 del inputs_teacher
                 del semantic_feature
                 del model_outs
