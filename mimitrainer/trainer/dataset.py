@@ -158,17 +158,18 @@ def collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teac
         else:
             waveform_teacher = waveform
 
-        # Ensure waveform is mono
-        if waveform_student.shape[0] > 1:
-            waveform_student = waveform_student.mean(dim=0)
-        else:
-            waveform_student = waveform_student.squeeze(0)
+        # Check for channel dimension and process accordingly
+        if len(waveform_student.shape) > 1:  # Multi-channel
+            waveform_student = waveform_student.mean(dim=0)  # Average across channels
+        else:  # Single-channel
+            waveform_student = waveform_student.squeeze()  # Ensure it's 1D
 
-        if waveform_teacher.shape[0] > 1:
-            waveform_teacher = waveform_teacher.mean(dim=0)
-        else:
-            waveform_teacher = waveform_teacher.squeeze(0)
+        if len(waveform_teacher.shape) > 1:  # Multi-channel
+            waveform_teacher = waveform_teacher.mean(dim=0)  # Average across channels
+        else:  # Single-channel
+            waveform_teacher = waveform_teacher.squeeze()  # Ensure it's 1D
 
+        # Convert to numpy array for feature extractor
         teacher_processed_batch.append(waveform_teacher.numpy())
         student_processed_batch.append(waveform_student.numpy())
         # print('waveform_teacher shape')
