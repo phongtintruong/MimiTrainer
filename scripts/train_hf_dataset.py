@@ -48,7 +48,7 @@ if __name__ == '__main__':
     # Create trainer instance
     trainer = MimiTrainer(
         epochs=2,
-        batch_size=16,
+        batch_size=8,
         train_audio_path=train_data_files,
         val_audio_path=val_data_files,
         generator=generator,
