@@ -164,9 +164,9 @@ def collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teac
 
         teacher_processed_batch.append(waveform_teacher.numpy())
         student_processed_batch.append(waveform_student.numpy())
-        print('waveform_teacher shape')
-        # print(waveform.shape)
-        print(waveform_teacher.shape)
+        # print('waveform_teacher shape')
+        # # print(waveform.shape)
+        # print(waveform_teacher.shape)
     #
     # Extract features for both teacher and student
     features_teacher = feature_extractor_teacher(
