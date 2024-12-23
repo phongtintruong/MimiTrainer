@@ -9,8 +9,11 @@ from transformers import AutoFeatureExtractor
 from mimitrainer.trainer import MimiTrainer
 from pathlib import Path
 from transformers import AutoProcessor, WavLMModel
+from huggingface_hub import login
+
 
 if __name__ == '__main__':
+    login("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")
 
     # Configuration
     CONFIG_PATH = "config/spt_base_cfg.json"  # Path to your config file
