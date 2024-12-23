@@ -70,6 +70,7 @@ class MimiTrainer(nn.Module):
             teacher_feature_extractor: Wav2Vec2Processor,
             generator_sampling_rate,
             teacher_sampling_rate,
+            max_length_s,
             discriminators: dict,
             cfg,
             accelerate_kwargs: dict = dict(),
@@ -119,6 +120,7 @@ class MimiTrainer(nn.Module):
         self.teacher_feature_extractor = teacher_feature_extractor
         self.generator_sampling_rate = generator_sampling_rate
         self.teacher_sampling_rate = teacher_sampling_rate
+        self.max_length_s = max_length_s
         self.discriminators = discriminators
         for param in self.teacher.parameters():
             param.requires_grad = False
@@ -165,16 +167,8 @@ class MimiTrainer(nn.Module):
         #     valid_file_list = f.readlines()
 
         self.ds = DistillDataset(data_dir=train_audio_path,
-                                 sample_rate_teacher=teacher_sampling_rate,
-                                 sample_rate_student=generator_sampling_rate,
-                                 student_feature_extractor=generator_feature_extractor,
-                                 teacher_feature_extractor=teacher_feature_extractor,
                                  mode='train')
         self.valid_ds = DistillDataset(data_dir=val_audio_path,
-                                       sample_rate_teacher=teacher_sampling_rate,
-                                       sample_rate_student=generator_sampling_rate,
-                                       student_feature_extractor=generator_feature_extractor,
-                                       teacher_feature_extractor=teacher_feature_extractor,
                                        mode='val')
         if self.is_main:
             self.print(
@@ -188,8 +182,8 @@ class MimiTrainer(nn.Module):
         drop_last = cfg.get("drop_last", True)
         num_workers = cfg.get("num_workers")
         self.dl = get_dataloader(self.ds, batch_size=self.batch_size, shuffle=True, drop_last=drop_last,
-                                 num_workers=num_workers)
-        self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=False, drop_last=False, num_workers=num_workers)
+                                 num_workers=num_workers, feature_extractor_student=generator_feature_extractor, feature_extractor_teacher=teacher_feature_extractor, teacher_sampling_rate=teacher_sampling_rate, student_sampling_rate=generator_sampling_rate, max_length_s=max_length_s)
+        self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=False, drop_last=False, num_workers=num_workers, feature_extractor_student=generator_feature_extractor, feature_extractor_teacher=teacher_feature_extractor, teacher_sampling_rate=teacher_sampling_rate, student_sampling_rate=generator_sampling_rate, max_length_s=max_length_s)
 
         # lr
         self.lr = cfg.get("learning_rate")
@@ -348,7 +342,8 @@ class MimiTrainer(nn.Module):
 
                 tic = time.time()
 
-                x, inputs_student, inputs_teacher = batch
+                inputs_student, inputs_teacher = batch
+                x = inputs_student.squeeze(0)
                 # x = x.to(self.device)
                 # inputs_student = inputs_student.to(self.device)
                 # inputs_teacher = inputs_teacher.to(self.device)
@@ -447,7 +442,8 @@ class MimiTrainer(nn.Module):
                     self.generator.eval()
                     with torch.inference_mode():
                         for i, batch in tqdm(enumerate(self.valid_dl)):
-                            x, inputs_student, inputs_teacher = batch
+                            inputs_student, inputs_teacher = batch
+                            x = inputs_student.squeeze(0)
                             # x = x.to(self.device)
                             # inputs_student = inputs_student.to(self.device)
                             # inputs_teacher = inputs_teacher.to(self.device)

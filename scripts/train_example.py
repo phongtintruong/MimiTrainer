@@ -48,9 +48,10 @@ if __name__ == '__main__':
         teacher_feature_extractor=processor,
         generator_sampling_rate=24000,
         teacher_sampling_rate=16000,
+        max_length_s=3,
         discriminators=discriminators,
         cfg=config,
-        accelerate_kwargs={'mixed_precision': 'bf16'},
+        accelerate_kwargs={'mixed_precision': 'fp16'},
     )
 
     # Start training (or continue training)

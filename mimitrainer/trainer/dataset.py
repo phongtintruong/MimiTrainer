@@ -96,13 +96,9 @@ class audioDataset(Dataset):
 
 
 class DistillDataset(Dataset):
-    def __init__(self, data_dir, sample_rate_student, student_feature_extractor, sample_rate_teacher, teacher_feature_extractor, mode='train'):
+    def __init__(self, data_dir, mode='train'):
         super().__init__()
         self.data_dir = data_dir
-        self.sample_rate_student = sample_rate_student
-        self.student_feature_extractor = student_feature_extractor
-        self.sample_rate_teacher = sample_rate_teacher
-        self.teacher_feature_extractor = teacher_feature_extractor
         self.mode = mode
 
         # Find all audio files in the data_dir
@@ -125,66 +121,92 @@ class DistillDataset(Dataset):
         audio_path = self.audio_files[idx]  # Directly use the path from self.audio_files
         waveform, sr = torchaudio.load(audio_path)
 
-        # Resample if necessary
-        if sr != self.sample_rate_student:
-            waveform_student = T.Resample(orig_freq=sr, new_freq=self.sample_rate_student)(waveform)
+        return waveform, sr
+
+
+def collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teacher_sampling_rate, student_sampling_rate, max_length_s=3):
+    """
+    Args:
+        batch (list): List of raw audio waveforms from Dataset.
+        feature_extractor_teacher (callable): Feature extractor for the teacher model.
+        feature_extractor_student (callable): Feature extractor for the student model.
+        teacher_sampling_rate (int): Sampling rate for the teacher.
+        student_sampling_rate (int): Sampling rate for the student.
+        max_length_s (int): Maximum audio length in seconds.
+
+    Returns:
+        features_teacher (torch.Tensor): Preprocessed features for teacher.
+        features_student (torch.Tensor): Preprocessed features for student.
+    """
+    teacher_processed_batch = []
+    student_processed_batch = []
+    for waveform, sr in batch:
+        if sr != student_sampling_rate:
+            waveform_student = T.Resample(orig_freq=sr, new_freq=student_sampling_rate)(waveform)
         else:
             waveform_student = waveform
 
-        if sr != self.sample_rate_teacher:
-            waveform_teacher = T.Resample(orig_freq=sr, new_freq=self.sample_rate_teacher)(waveform)
+        if sr != teacher_sampling_rate:
+            waveform_teacher = T.Resample(orig_freq=sr, new_freq=teacher_sampling_rate)(waveform)
         else:
             waveform_teacher = waveform
 
-        # If the audio has multiple channels, take the mean to make it mono
+        # Ensure waveform is mono
         if waveform_student.shape[0] > 1:
-            waveform_student = waveform_student.mean(dim=0, keepdim=True)
+            waveform_student = waveform_student.mean(dim=0)
+        else:
+            waveform_student = waveform_student.squeeze(0)
+
         if waveform_teacher.shape[0] > 1:
-            waveform_teacher = waveform_teacher.mean(dim=0, keepdim=True)
+            waveform_teacher = waveform_teacher.mean(dim=0)
+        else:
+            waveform_teacher = waveform_teacher.squeeze(0)
 
-        inputs_student = self.student_feature_extractor(raw_audio=waveform_student.squeeze(0).numpy(), sampling_rate=self.sample_rate_student, return_tensors='pt')["input_values"]
-        inputs_teacher = self.teacher_feature_extractor(waveform_teacher.squeeze(0).numpy(), sampling_rate=self.sample_rate_teacher, return_tensors='pt')["input_values"]
+        teacher_processed_batch.append(waveform_teacher.numpy())
+        student_processed_batch.append(waveform_student.numpy())
+        print('waveform_teacher shape')
+        # print(waveform.shape)
+        print(waveform_teacher.shape)
+    #
+    # Extract features for both teacher and student
+    features_teacher = feature_extractor_teacher(
+        teacher_processed_batch,
+        sampling_rate=teacher_sampling_rate,
+        max_length=teacher_sampling_rate * max_length_s,
+        truncation=True,
+        padding='max_length',
+        return_tensors="pt"
+    )["input_values"]
 
-        # print(f"Item {idx}: inputs_student.shape = {inputs_student.shape}, inputs_teacher.shape = {inputs_teacher.shape}")
+    # print(features_student.shape)
+    # print(features_teacher.shape)
+    # Compute max_length in terms of sample count
+    max_length_samples = int(student_sampling_rate * max_length_s)
 
-        return waveform_student, inputs_student, inputs_teacher
+    # Check if all samples are shorter than max_length
+    all_shorter_than_max_length = all(len(waveform) <= max_length_samples for waveform in student_processed_batch)
 
+    if all_shorter_than_max_length:
+        # Use padding when all samples are short
+        features_student = feature_extractor_student(
+            student_processed_batch,
+            sampling_rate=student_sampling_rate,
+            max_length=max_length_samples,
+            padding=True,  # Pad to the same length
+            return_tensors="pt"
+        )["input_values"]
+    else:
+        # Use truncation when some samples exceed max_length
+        features_student = feature_extractor_student(
+            student_processed_batch,
+            sampling_rate=student_sampling_rate,
+            max_length=max_length_samples,
+            truncation=True,  # Truncate longer samples
+            return_tensors="pt"
+        )["input_values"]
 
-def collate_fn(data):
-    """
-    Collate function to pad waveforms, student inputs, and teacher inputs.
-
-    Args:
-        data (list): List of (waveform_student, inputs_student, inputs_teacher) tuples.
-
-    Returns:
-        tuple: Padded student waveforms, student inputs, and teacher inputs.
-    """
-    waveforms, student_inputs, teacher_inputs = zip(*data)
-
-    # Pad waveforms along the time dimension
-    waveforms_padded = pad_sequence(
-        [waveform.squeeze(0) for waveform in waveforms],  # [1, seq_len] -> [seq_len]
-        batch_first=True,
-        padding_value=0.0
-    ).unsqueeze(1)
-
-    # Pad teacher inputs along the time dimension
-    teacher_inputs_padded = pad_sequence(
-        [x.squeeze(0) for x in teacher_inputs],  # [1, seq_len] -> [seq_len]
-        batch_first=True,
-        padding_value=0.0
-    )  # -> [batch_size, max_seq_len_teacher]
-
-    # Pad student inputs along the time dimension
-    student_inputs_padded = pad_sequence(
-        [x.squeeze(0).squeeze(0) for x in student_inputs],  # [1, 1, seq_len] -> [seq_len]
-        batch_first=True,
-        padding_value=0.0
-    ).unsqueeze(1)  # Add back channel dimension -> [batch_size, 1, max_seq_len_student]
-
-    return waveforms_padded, student_inputs_padded, teacher_inputs_padded
+    return features_student, features_teacher
 
 
-def get_dataloader(dataset, batch_size, num_workers=4, shuffle=True, drop_last=True):  # Add drop_last parameter
-    return DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, shuffle=shuffle, drop_last=drop_last, collate_fn=collate_fn)
+def get_dataloader(dataset, batch_size, feature_extractor_teacher, feature_extractor_student, teacher_sampling_rate, student_sampling_rate, max_length_s=3, num_workers=4, shuffle=True, drop_last=True):  # Add drop_last parameter
+    return DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, shuffle=shuffle, drop_last=drop_last, collate_fn=lambda batch: collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teacher_sampling_rate, student_sampling_rate, max_length_s))
