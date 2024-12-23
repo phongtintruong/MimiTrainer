@@ -161,14 +161,14 @@ class MimiTrainer(nn.Module):
             self.ds = RawAudioDataset(data_dir=train_audio_path, mode='train')
         else:
             # Hugging Face dataset
-            self.ds = load_dataset(train_audio_path, split='train')
+            self.ds = load_dataset("parquet", data_files=train_audio_path)['train']
 
         if isinstance(val_audio_path, str) and os.path.isdir(val_audio_path):
             # Local dataset
             self.valid_ds = RawAudioDataset(data_dir=val_audio_path, mode='val')
         else:
             # Hugging Face dataset
-            self.valid_ds = load_dataset(val_audio_path, split='test')[:100]
+            self.valid_ds = load_dataset("parquet", data_files=val_audio_path)['val'].select(range(100))
 
         if self.is_main:
             self.print(
