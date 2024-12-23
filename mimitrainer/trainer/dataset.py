@@ -192,7 +192,7 @@ def collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teac
             student_processed_batch,
             sampling_rate=student_sampling_rate,
             max_length=max_length_samples,
-            padding=True,  # Pad to the same length
+            padding='max_length',  # Pad to the same length
             return_tensors="pt"
         )["input_values"]
     else:
