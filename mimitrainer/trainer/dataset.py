@@ -95,7 +95,7 @@ class audioDataset(Dataset):
 
 
 
-class DistillDataset(Dataset):
+class RawAudioDataset(Dataset):
     def __init__(self, data_dir, mode='train'):
         super().__init__()
         self.data_dir = data_dir
@@ -121,7 +121,9 @@ class DistillDataset(Dataset):
         audio_path = self.audio_files[idx]  # Directly use the path from self.audio_files
         waveform, sr = torchaudio.load(audio_path)
 
-        return waveform, sr
+        return {
+            "audio": {"array": waveform, 'sampling_rate': sr}
+        }
 
 
 def collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teacher_sampling_rate, student_sampling_rate, max_length_s=3):
@@ -140,7 +142,8 @@ def collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teac
     """
     teacher_processed_batch = []
     student_processed_batch = []
-    for waveform, sr in batch:
+    for item in batch:
+        waveform, sr = item["audio"]["array"], item["audio"]["sampling_rate"]
         if sr != student_sampling_rate:
             waveform_student = T.Resample(orig_freq=sr, new_freq=student_sampling_rate)(waveform)
         else:
@@ -210,3 +213,4 @@ def collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teac
 
 def get_dataloader(dataset, batch_size, feature_extractor_teacher, feature_extractor_student, teacher_sampling_rate, student_sampling_rate, max_length_s=3, num_workers=4, shuffle=True, drop_last=True):  # Add drop_last parameter
     return DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, shuffle=shuffle, drop_last=drop_last, collate_fn=lambda batch: collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teacher_sampling_rate, student_sampling_rate, max_length_s))
+

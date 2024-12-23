@@ -9,33 +9,36 @@ import torch
 from torch import nn
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-from .dataset import get_dataloader, DistillDataset
+from .dataset import get_dataloader, RawAudioDataset
 from .optimizer import get_optimizer
 from torch.utils import tensorboard
 from .loss import *
 import json
-# from speechtokenizer import SpeechTokenizer
 import time
 from tqdm import tqdm
-from accelerate import Accelerator, DistributedType, DistributedDataParallelKwargs, DataLoaderConfiguration
+from accelerate import Accelerator, DistributedDataParallelKwargs, DataLoaderConfiguration
 from transformers import AutoFeatureExtractor, PreTrainedModel, Wav2Vec2CTCTokenizer
 from transformers import EncodecFeatureExtractor, AutoProcessor, Wav2Vec2Processor
-# from transformers.feature_extraction_utils import FeatureExtractorMixin
 import torchaudio
-from typing import Union, Dict, Any  # Import Dict and Any
+from datasets import load_dataset  # Import Hugging Face datasets
+from typing import Union, Dict, Any
+
 
 # helpers
 
 def exists(val):
     return val is not None
 
+
 def cycle(dl):
     while True:
         for data in dl:
             yield data
 
+
 def cast_tuple(t):
     return t if isinstance(t, (tuple, list)) else (t,)
+
 
 def accum_log(log, new_logs):
     for key, new_value in new_logs.items():
@@ -43,18 +46,16 @@ def accum_log(log, new_logs):
         log[key] = old_value + new_value
     return log
 
-def checkpoint_num_steps(checkpoint_path):
-    """Returns the number of steps trained from a checkpoint based on the filename.
 
-    Filename format assumed to be something like "/path/to/soundstorm.20000.pt" which is
-    for 20k train steps. Returns 20000 in that case.
-    """
+def checkpoint_num_steps(checkpoint_path):
+    """Returns the number of steps trained from a checkpoint based on the filename."""
     results = re.findall(r'\d+', str(checkpoint_path))
 
     if len(results) == 0:
         return 0
 
     return int(results[-1])
+
 
 class MimiTrainer(nn.Module):
     @beartype
@@ -140,6 +141,7 @@ class MimiTrainer(nn.Module):
             self.distill_loss = partial(t_axis_distill_loss, lambda_sim=lambda_sim)
         else:
             self.distill_loss = d_axis_distill_loss
+
         self.mel_loss_kwargs_list = []
         mult = 1
         for i in range(len(self.mel_loss_lambdas)):
@@ -153,26 +155,24 @@ class MimiTrainer(nn.Module):
                            'hop_size': cfg.get('hop_size'), 'win_size': cfg.get('win_size'), 'fmin': cfg.get('fmin'),
                            'fmax': cfg.get('fmax')}
 
-        # max grad norm
+        # Check if the datasets are Hugging Face datasets or local directories
+        if isinstance(train_audio_path, str) and os.path.isdir(train_audio_path):
+            # Local dataset
+            self.ds = RawAudioDataset(data_dir=train_audio_path, mode='train')
+        else:
+            # Hugging Face dataset
+            self.ds = load_dataset(train_audio_path, split='train')
 
-        # self.max_grad_norm = max_grad_norm
-        segment_size = cfg.get("segment_size")
-        train_files = cfg.get("train_files")
-        batch_size = cfg.get("batch_size")
-        self.batch_size = batch_size
-        # with open(train_files, 'r') as f:
-        #     train_file_list = f.readlines()
-        # valid_files = cfg.get("valid_files")
-        # with open(valid_files, 'r') as f:
-        #     valid_file_list = f.readlines()
+        if isinstance(val_audio_path, str) and os.path.isdir(val_audio_path):
+            # Local dataset
+            self.valid_ds = RawAudioDataset(data_dir=val_audio_path, mode='val')
+        else:
+            # Hugging Face dataset
+            self.valid_ds = load_dataset(val_audio_path, split='test')[:100]
 
-        self.ds = DistillDataset(data_dir=train_audio_path,
-                                 mode='train')
-        self.valid_ds = DistillDataset(data_dir=val_audio_path,
-                                       mode='val')
         if self.is_main:
             self.print(
-                f'training with dataset of {len(self.ds)} samples and validating with randomly splitted {len(self.valid_ds)} samples')
+                f'training with dataset of {len(self.ds)} samples and validating with {len(self.valid_ds)} samples')
 
         assert len(self.ds) >= self.batch_size, 'dataset must have sufficient samples for training'
         assert len(
@@ -182,8 +182,15 @@ class MimiTrainer(nn.Module):
         drop_last = cfg.get("drop_last", True)
         num_workers = cfg.get("num_workers")
         self.dl = get_dataloader(self.ds, batch_size=self.batch_size, shuffle=True, drop_last=drop_last,
-                                 num_workers=num_workers, feature_extractor_student=generator_feature_extractor, feature_extractor_teacher=teacher_feature_extractor, teacher_sampling_rate=teacher_sampling_rate, student_sampling_rate=generator_sampling_rate, max_length_s=max_length_s)
-        self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=False, drop_last=False, num_workers=4, feature_extractor_student=generator_feature_extractor, feature_extractor_teacher=teacher_feature_extractor, teacher_sampling_rate=teacher_sampling_rate, student_sampling_rate=generator_sampling_rate, max_length_s=max_length_s)
+                                 num_workers=num_workers, feature_extractor_student=generator_feature_extractor,
+                                 feature_extractor_teacher=teacher_feature_extractor,
+                                 teacher_sampling_rate=teacher_sampling_rate,
+                                 student_sampling_rate=generator_sampling_rate, max_length_s=max_length_s)
+        self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=False, drop_last=False,
+                                       num_workers=4, feature_extractor_student=generator_feature_extractor,
+                                       feature_extractor_teacher=teacher_feature_extractor,
+                                       teacher_sampling_rate=teacher_sampling_rate,
+                                       student_sampling_rate=generator_sampling_rate, max_length_s=max_length_s)
 
         # lr
         self.lr = cfg.get("learning_rate")
