@@ -144,6 +144,10 @@ def collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teac
     student_processed_batch = []
     for item in batch:
         waveform, sr = item["audio"]["array"], item["audio"]["sampling_rate"]
+        # Convert numpy array to torch tensor if needed
+        if isinstance(waveform, np.ndarray):
+            waveform = torch.tensor(waveform, dtype=torch.float32)
+
         if sr != student_sampling_rate:
             waveform_student = T.Resample(orig_freq=sr, new_freq=student_sampling_rate)(waveform)
         else:
