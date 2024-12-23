@@ -48,7 +48,7 @@
     "num_workers": 8,
     "log_steps": 2,
     "stdout_steps": 2,
-    "save_model_steps": 4,
+    "save_model_steps": 8,
     "num_ckpt_keep": 6,
     "showpiece_num": 8
 }
