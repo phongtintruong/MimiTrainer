@@ -10,10 +10,14 @@ from mimitrainer.trainer import MimiTrainer
 from pathlib import Path
 from transformers import AutoProcessor, WavLMModel
 from huggingface_hub import login
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 
 if __name__ == '__main__':
-    login("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")
+    hf_token = os.getenv("HF_TOKEN")
+    login(hf_token)
 
     # Configuration
     CONFIG_PATH = "config/spt_base_cfg.json"  # Path to your config file
