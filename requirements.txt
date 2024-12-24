@@ -12,3 +12,5 @@ transformers
 datasets
 huggingface_hub
 python-dotenv
+beartype
+librosa

@@ -18,7 +18,6 @@ load_dotenv()
 if __name__ == '__main__':
     hf_token = os.getenv("HF_TOKEN")
     login(hf_token)
-    
     # Configuration
     CONFIG_PATH = "config/spt_base_cfg.json"  # Path to your config file
 
@@ -52,7 +51,7 @@ if __name__ == '__main__':
     # Create trainer instance
     trainer = MimiTrainer(
         epochs=2,
-        batch_size=4,
+        batch_size=2,
         train_audio_path=train_data_files,
         val_audio_path=val_data_files,
         generator=generator,
