@@ -34,7 +34,7 @@ if __name__ == '__main__':
     generator.eval()  # Set the model to evaluation mode
 
     generator.push_to_hub(
-        repo_id='phongtintruong/meomeo-mhubert-6000',  # Name of the repository
+        repo_id='phongtintruong/meomeo-mhubert-6000-v0.1',  # Name of the repository
         use_temp_dir=True,                # Temporarily saves files before pushing
         commit_message="Initial commit",  # Optional commit message
     )
