@@ -68,7 +68,7 @@ class MimiTrainer(nn.Module):
             generator: PreTrainedModel,
             generator_feature_extractor: EncodecFeatureExtractor,
             teacher: PreTrainedModel,
-            teacher_feature_extractor: Wav2Vec2Processor,
+            teacher_feature_extractor,
             generator_sampling_rate,
             teacher_sampling_rate,
             max_length_s,
