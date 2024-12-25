@@ -1,6 +1,8 @@
 import torch
 import torchaudio
 import matplotlib.pylab as plt
+import torch.nn.functional as F
+
 
 def dynamic_range_compression_torch(x, C=1, clip_val=1e-5):
     return torch.log(torch.clamp(x, min=clip_val) * C)
@@ -83,14 +85,35 @@ def adversarial_loss(disc_outputs):
     return loss
 
 
+# def d_axis_distill_loss(feature, target_feature):
+#     print('feature:', feature.size())
+#     print('target_feature:', target_feature.size())
+#     n = min(feature.size(1), target_feature.size(1))
+#     distill_loss = - torch.log(torch.sigmoid(torch.nn.functional.cosine_similarity(feature[:, :n], target_feature[:, :n], axis=1))).mean()
+#     return distill_loss
+
+# def t_axis_distill_loss(feature, target_feature, lambda_sim=1):
+#     n = min(feature.size(1), target_feature.size(1))
+#     l1_loss = torch.functional.l1_loss(feature[:, :n], target_feature[:, :n], reduction='mean')
+#     sim_loss = - torch.log(torch.sigmoid(torch.nn.functional.cosine_similarity(feature[:, :n], target_feature[:, :n], axis=-1))).mean()
+#     distill_loss = l1_loss + lambda_sim * sim_loss
+    # return distill_loss 
+
 def d_axis_distill_loss(feature, target_feature):
-    n = min(feature.size(1), target_feature.size(1))
-    distill_loss = - torch.log(torch.sigmoid(torch.nn.functional.cosine_similarity(feature[:, :n], target_feature[:, :n], axis=1))).mean()
+    # print('feature:', feature.size())
+    # print('target_feature:', target_feature.size())
+    
+    # Compute cosine similarity along the feature dimension (dim=2)
+    distill_loss = -torch.log(torch.sigmoid(F.cosine_similarity(feature, target_feature, dim=2))).mean()
     return distill_loss
 
 def t_axis_distill_loss(feature, target_feature, lambda_sim=1):
-    n = min(feature.size(1), target_feature.size(1))
-    l1_loss = torch.functional.l1_loss(feature[:, :n], target_feature[:, :n], reduction='mean')
-    sim_loss = - torch.log(torch.sigmoid(torch.nn.functional.cosine_similarity(feature[:, :n], target_feature[:, :n], axis=-1))).mean()
+    # Compute L1 loss
+    l1_loss = F.l1_loss(feature, target_feature, reduction='mean')
+    
+    # Compute cosine similarity along the feature dimension (dim=2)
+    sim_loss = -torch.log(torch.sigmoid(F.cosine_similarity(feature, target_feature, dim=2))).mean()
+    
+    # Combine L1 and similarity losses
     distill_loss = l1_loss + lambda_sim * sim_loss
-    return distill_loss 
+    return distill_loss
