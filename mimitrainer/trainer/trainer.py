@@ -379,7 +379,7 @@ class MimiTrainer(nn.Module):
                 # print(semantic_feature)
                 # print(semantic_feature.shape)
                 model_outs = self.generator(x)
-                discretes, x_hat, feature = model_outs.audio_codes, model_outs.audio_values, model_outs.semantic_token
+                x_hat, feature = model_outs.audio_values, model_outs.semantic_token
                 # print('x_hat')
                 # print(x_hat)
                 # print(x_hat.shape)
@@ -484,7 +484,7 @@ class MimiTrainer(nn.Module):
                             # print(semantic_feature)
                             # print(semantic_feature.shape)
                             model_outs = self.generator(x)
-                            discretes, x_hat, feature = model_outs.audio_codes, model_outs.audio_values, model_outs.semantic_token
+                            x_hat, feature = model_outs.audio_values, model_outs.semantic_token
                             # print('x_hat')
                             # print(x_hat)
                             # print(x_hat.shape)
@@ -552,7 +552,7 @@ class MimiTrainer(nn.Module):
                 del inputs_teacher
                 del semantic_feature
                 del model_outs
-                del discretes
+                # del discretes
                 del x_hat
                 del feature
                 del discriminator_outputs
