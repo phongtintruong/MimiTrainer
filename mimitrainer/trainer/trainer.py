@@ -16,7 +16,7 @@ from .loss import *
 import json
 import time
 from tqdm import tqdm
-from accelerate import Accelerator, DistributedDataParallelKwargs, DataLoaderConfiguration
+from accelerate import Accelerator, DistributedDataParallelKwargs, DataLoaderConfiguration, DistributedType
 from transformers import AutoFeatureExtractor, PreTrainedModel, Wav2Vec2CTCTokenizer
 from transformers import EncodecFeatureExtractor, AutoProcessor, Wav2Vec2Processor
 import torchaudio
@@ -61,6 +61,7 @@ class MimiTrainer(nn.Module):
     @beartype
     def __init__(
             self,
+            gradient_accumulation_steps: int,
             epochs,
             batch_size,
             train_audio_path,
@@ -88,6 +89,7 @@ class MimiTrainer(nn.Module):
         self.num_ckpt_keep = cfg.get("num_ckpt_keep")
         # self.epochs = cfg.get("epochs")
         self.epochs = epochs
+        self.gradient_accumulation_steps = gradient_accumulation_steps
         self.num_warmup_steps = cfg.get("num_warmup_steps")
         # self.batch_size = cfg.get("batch_size")
         self.batch_size = batch_size
@@ -104,6 +106,7 @@ class MimiTrainer(nn.Module):
         # tracker = AudioTensorBoardTracker(run_name=project_name, logging_dir=results_folder)
         dataloader_config = DataLoaderConfiguration(split_batches=split_batches)
         self.accelerator = Accelerator(
+            gradient_accumulation_steps=self.gradient_accumulation_steps,
             dataloader_config=dataloader_config,
             kwargs_handlers=[ddp_kwargs],
             # log_with=tracker,
@@ -326,7 +329,7 @@ class MimiTrainer(nn.Module):
                 self.writer.add_scalar(k, v, global_step=step)
 
     def train(self):
-
+        print(self.accelerator.gradient_accumulation_steps)
         self.generator.train()
         map(lambda disc: disc.train(), self.discriminators.values())
         step_time_log = {}
@@ -348,71 +351,93 @@ class MimiTrainer(nn.Module):
             for batch in self.dl:
 
                 tic = time.time()
-
                 x, inputs_teacher = batch
-                # x = inputs_student.squeeze(0)
-                # x = x.to(self.device)
-                # inputs_student = inputs_student.to(self.device)
-                # inputs_teacher = inputs_teacher.to(self.device)
-                # print('x')
-                # print(x)
-                # print(x.shape)
-                # print('inputs_student')
-                # print(inputs_student)
-                # print(inputs_student.shape)
-                # print('inputs_teacher')
-                # print(inputs_teacher)
-                # print(inputs_teacher.shape)
-                with torch.no_grad():
-                    outputs_teacher = self.teacher(inputs_teacher)
-                semantic_feature = outputs_teacher.last_hidden_state
-                # print('org teacher_semantic token')
-                # print(semantic_feature.shape)
-                semantic_feature = nn.functional.pad(
-                    semantic_feature.transpose(1, 2),  # Transpose to [Batch, Seq Length, Channels]
-                    pad=(4, 4),  # Symmetric padding
-                    mode="reflect"
-                )
-                semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8,
-                                                            stride=4).transpose(1, 2)
-                # print('teacher semantic token')
-                # print(semantic_feature)
-                # print(semantic_feature.shape)
-                model_outs = self.generator(x)
-                x_hat, feature = model_outs.audio_values, model_outs.semantic_token
-                # print('x_hat')
-                # print(x_hat)
-                # print(x_hat.shape)
-                # print('feature')
-                # print(feature)
-                # print(feature.shape)
-                # print(len(feature))
-                # print('discretes')
-                # print(discretes)
-                # print(discretes.shape)
+                    # x = inputs_student.squeeze(0)
+                    # x = x.to(self.device)
+                    # inputs_student = inputs_student.to(self.device)
+                    # inputs_teacher = inputs_teacher.to(self.device)
+                    # print('x')
+                    # print(x)
+                    # print(x.shape)
+                    # print('inputs_student')
+                    # print(inputs_student)
+                    # print(inputs_student.shape)
+                    # print('inputs_teacher')
+                    # print(inputs_teacher)
+                    # print(inputs_teacher.shape)
+                with self.accelerator.accumulate(self.discriminators):
+                    with torch.no_grad():
+                        outputs_teacher = self.teacher(inputs_teacher)
+                    semantic_feature = outputs_teacher.last_hidden_state
+                    # print('org teacher_semantic token')
+                    # print(semantic_feature.shape)
+                    semantic_feature = nn.functional.pad(
+                        semantic_feature.transpose(1, 2),  # Transpose to [Batch, Seq Length, Channels]
+                        pad=(4, 4),  # Symmetric padding
+                        mode="reflect"
+                    )
+                    semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8,
+                                                                stride=4).transpose(1, 2)
+                    # print('teacher semantic token')
+                    # print(semantic_feature)
+                    # print(semantic_feature.shape)
+                    model_outs = self.generator(x)
+                    x_hat, feature = model_outs.audio_values, model_outs.semantic_token
+                    # print('x_hat')
+                    # print(x_hat)
+                    # print(x_hat.shape)
+                    # print('feature')
+                    # print(feature)
+                    # print(feature.shape)
+                    # print(len(feature))
+                    # print('discretes')
+                    # print(discretes)
+                    # print(discretes.shape)
 
-                # Discriminators
-                self.optim_d.zero_grad()
-                discriminator_outputs = list(map(lambda disc: disc(x, x_hat.detach()), self.discriminators.values()))
-                loss_disc_all = sum(map(lambda x: discriminator_loss(*x[:2]), discriminator_outputs))
+                    # Discriminators
+                    self.optim_d.zero_grad()
+                    discriminator_outputs = list(map(lambda disc: disc(x, x_hat.detach()), self.discriminators.values()))
+                    loss_disc_all = sum(map(lambda x: discriminator_loss(*x[:2]), discriminator_outputs))
 
-                self.accelerator.backward(loss_disc_all)
-                self.optim_d.step()
+                    self.accelerator.backward(loss_disc_all)
+                    self.optim_d.step()
+                    # Update lr
+                    self.steps += 1
+                    steps = int(self.steps.item())
+                    if steps % self.gradient_accumulation_steps == 0:
+                        accumulated_steps = steps // self.gradient_accumulation_steps
+                        if accumulated_steps < self.num_warmup_steps:
+                            lr = self.warmup(accumulated_steps)
+                            for param_group in self.optim_d.param_groups:
+                                param_group['lr'] = lr
+                        else:
+                            self.scheduler_d.step()
+                    
 
-                # Generator
-                self.optim_g.zero_grad()
-                discriminator_outputs = list(map(lambda disc: disc(x, x_hat), self.discriminators.values()))
-                loss_recon = recon_loss(x, x_hat)
-                loss_mel = sum(map(lambda mel_k: mel_k[0] * mel_loss(x, x_hat, **mel_k[1]),
-                                   zip(self.mel_loss_lambdas, self.mel_loss_kwargs_list)))
-                loss_feature = sum(map(lambda x: feature_loss(*x[2:]), discriminator_outputs))
-                loss_adversarial = sum(map(lambda x: adversarial_loss(x[1]), discriminator_outputs))
-                loss_distill = self.distill_loss(feature, semantic_feature)
-                loss_generator_all = loss_feature + loss_adversarial + loss_mel + loss_recon * self.recon_loss_lambda + self.distill_loss_lambda * loss_distill
-                self.accelerator.backward(loss_generator_all)
-                # if exists(self.max_grad_norm):
-                #     self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-                self.optim_g.step()
+                with self.accelerator.accumulate(self.generator):
+                    # Generator
+                    self.optim_g.zero_grad()
+                    discriminator_outputs = list(map(lambda disc: disc(x, x_hat), self.discriminators.values()))
+                    loss_recon = recon_loss(x, x_hat)
+                    loss_mel = sum(map(lambda mel_k: mel_k[0] * mel_loss(x, x_hat, **mel_k[1]),
+                                    zip(self.mel_loss_lambdas, self.mel_loss_kwargs_list)))
+                    loss_feature = sum(map(lambda x: feature_loss(*x[2:]), discriminator_outputs))
+                    loss_adversarial = sum(map(lambda x: adversarial_loss(x[1]), discriminator_outputs))
+                    loss_distill = self.distill_loss(feature, semantic_feature)
+                    loss_generator_all = loss_feature + loss_adversarial + loss_mel + loss_recon * self.recon_loss_lambda + self.distill_loss_lambda * loss_distill
+                    self.accelerator.backward(loss_generator_all)
+                    # if exists(self.max_grad_norm):
+                    #     self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                    self.optim_g.step()
+                    if steps % self.gradient_accumulation_steps == 0:
+                        accumulated_steps = steps // self.gradient_accumulation_steps
+                        if accumulated_steps < self.num_warmup_steps:
+                            lr = self.warmup(accumulated_steps)
+                            for param_group in self.optim_g.param_groups:
+                                param_group['lr'] = lr
+                        else:
+                            self.scheduler_g.step()
+                            lr = self.scheduler_g.get_last_lr()[0]
 
                 # Remove the detached tensors from the computational graph
                 x = x.detach()
@@ -422,129 +447,133 @@ class MimiTrainer(nn.Module):
                 # self.accelerator.wait_for_everyone()
 
                 # log
-                if self.is_main and not (steps % self.stdout_steps):
-                    with torch.inference_mode():
-                        mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
-                    self.print(
-                        f"Epoch {epoch} -- Step {steps}: Gen Loss: {loss_generator_all.item():0.3f}; Mel Error:{mel_error:0.3f}; Distill Loss: {loss_distill.item():0.3f}; Time cost per step: {step_time_log['time_cost'] / self.stdout_steps:0.3f}s")
-                    step_time_log = {}
-                if self.is_main and not (steps % self.log_steps):
-                    self.log({"train/discriminators loss": loss_disc_all.item(),
-                              "train/generator loss": loss_generator_all.item(),
-                              "train/feature loss": loss_feature.item(),
-                              "train/adversarial loss": loss_adversarial.item(), "train/mel loss": loss_mel.item(),
-                              "train/mel error": mel_error, "train/distillation loss": loss_distill.item(),
-                              "train/learning_rate": lr}, step=steps)
+                if steps % self.gradient_accumulation_steps == 0:
+                    accumulated_steps = steps // self.gradient_accumulation_steps
+                    if self.is_main and not (accumulated_steps % self.stdout_steps):
+                        with torch.inference_mode():
+                            mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
+                        self.print(
+                            f"Epoch {epoch} -- Step {accumulated_steps}: Gen Loss: {loss_generator_all.item():0.3f}; Mel Error:{mel_error:0.3f}; Distill Loss: {loss_distill.item():0.3f}; Time cost per step: {step_time_log['time_cost'] / self.stdout_steps:0.3f}s")
+                        step_time_log = {}
+                    if self.is_main and not (accumulated_steps % self.log_steps):
+                        self.log({"train/discriminators loss": loss_disc_all.item(),
+                                "train/generator loss": loss_generator_all.item(),
+                                "train/feature loss": loss_feature.item(),
+                                "train/adversarial loss": loss_adversarial.item(), "train/mel loss": loss_mel.item(),
+                                "train/mel error": mel_error, "train/distillation loss": loss_distill.item(),
+                                "train/learning_rate": lr}, step=accumulated_steps)
 
                 self.accelerator.wait_for_everyone()
 
                 # validate and save model
-                if self.is_main and not (steps % self.save_model_steps) and steps != 0:
+                if steps % self.gradient_accumulation_steps == 0:
+                    accumulated_steps = steps // self.gradient_accumulation_steps
+                    if self.is_main and not (accumulated_steps % self.save_model_steps) and accumulated_steps != 0:
 
-                    self.print('Validation start ...')
-                    # validate
-                    total_mel_error = 0.0
-                    total_distill_loss = 0.0
-                    num = 0
-                    self.generator.eval()
-                    with torch.inference_mode():
-                        for i, batch in tqdm(enumerate(self.valid_dl)):
-                            x, inputs_teacher = batch
-                            # x = inputs_student.squeeze(0)
-                            # x = x.to(self.device)
-                            # inputs_student = inputs_student.to(self.device)
-                            # inputs_teacher = inputs_teacher.to(self.device)
-                            # print('x')
-                            # print(x)
-                            # print(x.shape)
-                            # print('inputs_student')
-                            # print(inputs_student)
-                            # print(inputs_student.shape)
-                            # print('inputs_teacher')
-                            # print(inputs_teacher)
-                            # print(inputs_teacher.shape)
-                            with torch.no_grad():
-                                outputs_teacher = self.teacher(inputs_teacher)
-                            semantic_feature = outputs_teacher.last_hidden_state
-                            # print('org teacher_semantic token')
-                            # print(semantic_feature.shape)
-                            semantic_feature = nn.functional.pad(
-                                semantic_feature.transpose(1, 2),  # Transpose to [Batch, Seq Length, Channels]
-                                pad=(4, 4),  # Symmetric padding
-                                mode="reflect"
-                            )
-                            semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8,
-                                                                        stride=4).transpose(1, 2)
+                        self.print('Validation start ...')
+                        # validate
+                        total_mel_error = 0.0
+                        total_distill_loss = 0.0
+                        num = 0
+                        self.generator.eval()
+                        with torch.inference_mode():
+                            for i, batch in tqdm(enumerate(self.valid_dl)):
+                                x, inputs_teacher = batch
+                                # x = inputs_student.squeeze(0)
+                                # x = x.to(self.device)
+                                # inputs_student = inputs_student.to(self.device)
+                                # inputs_teacher = inputs_teacher.to(self.device)
+                                # print('x')
+                                # print(x)
+                                # print(x.shape)
+                                # print('inputs_student')
+                                # print(inputs_student)
+                                # print(inputs_student.shape)
+                                # print('inputs_teacher')
+                                # print(inputs_teacher)
+                                # print(inputs_teacher.shape)
+                                with torch.no_grad():
+                                    outputs_teacher = self.teacher(inputs_teacher)
+                                semantic_feature = outputs_teacher.last_hidden_state
+                                # print('org teacher_semantic token')
+                                # print(semantic_feature.shape)
+                                semantic_feature = nn.functional.pad(
+                                    semantic_feature.transpose(1, 2),  # Transpose to [Batch, Seq Length, Channels]
+                                    pad=(4, 4),  # Symmetric padding
+                                    mode="reflect"
+                                )
+                                semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8,
+                                                                            stride=4).transpose(1, 2)
 
-                            # print(x.shape)
-                            # x = x.unsqueeze(1)
-                            # x = x.squeeze().numpy()
+                                # print(x.shape)
+                                # x = x.unsqueeze(1)
+                                # x = x.squeeze().numpy()
 
-                            # print('teacher semantic token')
-                            # print(semantic_feature)
-                            # print(semantic_feature.shape)
-                            model_outs = self.generator(x)
-                            x_hat, feature = model_outs.audio_values, model_outs.semantic_token
-                            # print('x_hat')
-                            # print(x_hat)
-                            # print(x_hat.shape)
-                            # print('feature')
-                            # print(feature)
-                            # print(feature.shape)
-                            # print(len(feature))
-                            # print('discretes')
-                            # print(discretes)
-                            # print(discretes.shape)
+                                # print('teacher semantic token')
+                                # print(semantic_feature)
+                                # print(semantic_feature.shape)
+                                model_outs = self.generator(x)
+                                x_hat, feature = model_outs.audio_values, model_outs.semantic_token
+                                # print('x_hat')
+                                # print(x_hat)
+                                # print(x_hat.shape)
+                                # print('feature')
+                                # print(feature)
+                                # print(feature.shape)
+                                # print(len(feature))
+                                # print('discretes')
+                                # print(discretes)
+                                # print(discretes.shape)
 
-                            mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
-                            total_mel_error += mel_error
-                            loss_distill = self.distill_loss(feature, semantic_feature).item()
-                            total_distill_loss += loss_distill
-                            num += x.size(0)
-                            if i < self.showpiece_num:
-                                if not self.plot_gt_once:
-                                    self.log({f'groundtruth/x_{i}': x[0].cpu().detach()}, type='audio',
-                                             sample_rate=self.sample_rate, step=steps)
-                                    x_spec = mel_spectrogram(x.squeeze(1), **self.mel_kwargs)
-                                    self.log({f'groundtruth/x_spec_{i}': plot_spectrogram(x_spec[0].cpu().numpy())},
-                                             type='figure', step=steps)
+                                mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
+                                total_mel_error += mel_error
+                                loss_distill = self.distill_loss(feature, semantic_feature).item()
+                                total_distill_loss += loss_distill
+                                num += x.size(0)
+                                if i < self.showpiece_num:
+                                    if not self.plot_gt_once:
+                                        self.log({f'groundtruth/x_{i}': x[0].cpu().detach()}, type='audio',
+                                                sample_rate=self.sample_rate, step=accumulated_steps)
+                                        x_spec = mel_spectrogram(x.squeeze(1), **self.mel_kwargs)
+                                        self.log({f'groundtruth/x_spec_{i}': plot_spectrogram(x_spec[0].cpu().numpy())},
+                                                type='figure', step=accumulated_steps)
 
-                                self.log({f'generate/x_hat_{i}': x_hat[0].cpu().detach()}, type='audio',
-                                         sample_rate=self.sample_rate, step=steps)
-                                x_hat_spec = mel_spectrogram(x_hat.squeeze(1), **self.mel_kwargs)
-                                self.log({f'generate/x_hat_spec_{i}': plot_spectrogram(x_hat_spec[0].cpu().numpy())},
-                                         type='figure', step=steps)
-                            # Remove the detached tensors from the computational graph
-                            x = x.detach()
-                            x_hat = x_hat.detach()
-                        if not self.plot_gt_once:
-                            self.plot_gt_once = True
-                        self.print(
-                            f'{steps}: dev mel error: {total_mel_error / num:0.3f}\tdev distill loss: {total_distill_loss / num:0.3f}')
-                        self.log(
-                            {'dev/mel error': total_mel_error / num, 'dev/distillation loss': total_distill_loss / num},
-                            step=steps)
+                                    self.log({f'generate/x_hat_{i}': x_hat[0].cpu().detach()}, type='audio',
+                                            sample_rate=self.sample_rate, step=accumulated_steps)
+                                    x_hat_spec = mel_spectrogram(x_hat.squeeze(1), **self.mel_kwargs)
+                                    self.log({f'generate/x_hat_spec_{i}': plot_spectrogram(x_hat_spec[0].cpu().numpy())},
+                                            type='figure', step=accumulated_steps)
+                                # Remove the detached tensors from the computational graph
+                                x = x.detach()
+                                x_hat = x_hat.detach()
+                            if not self.plot_gt_once:
+                                self.plot_gt_once = True
+                            self.print(
+                                f'{accumulated_steps}: dev mel error: {total_mel_error / num:0.3f}\tdev distill loss: {total_distill_loss / num:0.3f}')
+                            self.log(
+                                {'dev/mel error': total_mel_error / num, 'dev/distillation loss': total_distill_loss / num},
+                                step=accumulated_steps)
 
-                    # save model
-                    model_path = str(self.results_folder / f'MimiTrainer_{steps:08d}')
-                    self.save(model_path, total_mel_error / num)
-                    self.print(f'{steps}: saving model to {str(self.results_folder)}')
-                    self.generator.train()
-                    print('back to train')
+                        # save model
+                        model_path = str(self.results_folder / f'MimiTrainer_{accumulated_steps:08d}')
+                        self.save(model_path, total_mel_error / num)
+                        self.print(f'{accumulated_steps}: saving model to {str(self.results_folder)}')
+                        self.generator.train()
+                        print('back to train')
 
-                # Update lr
-                self.steps += 1
-                steps = int(self.steps.item())
-                if steps < self.num_warmup_steps:
-                    lr = self.warmup(steps)
-                    for param_group in self.optim_g.param_groups:
-                        param_group['lr'] = lr
-                    for param_group in self.optim_d.param_groups:
-                        param_group['lr'] = lr
-                else:
-                    self.scheduler_d.step()
-                    self.scheduler_g.step()
-                    lr = self.scheduler_g.get_last_lr()[0]
+                # # Update lr
+                # self.steps += 1
+                # steps = int(self.steps.item())
+                # if steps < self.num_warmup_steps:
+                #     lr = self.warmup(steps)
+                #     for param_group in self.optim_g.param_groups:
+                #         param_group['lr'] = lr
+                #     for param_group in self.optim_d.param_groups:
+                #         param_group['lr'] = lr
+                # else:
+                #     self.scheduler_d.step()
+                #     self.scheduler_g.step()
+                #     lr = self.scheduler_g.get_last_lr()[0]
 
                 # Explicitly delete to manage memory
                 del x
