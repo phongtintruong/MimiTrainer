@@ -50,10 +50,11 @@ if __name__ == '__main__':
 
     # Create trainer instance
     trainer = MimiTrainer(
-        epochs=2,
+        epochs=500,
+        gradient_accumulation_steps=4,
         batch_size=2,
-        train_audio_path=train_data_files,
-        val_audio_path=val_data_files,
+        train_audio_path='audio/raw',
+        val_audio_path='audio/raw',
         generator=generator,
         generator_feature_extractor=feature_extractor,
         teacher=model,
