@@ -258,7 +258,7 @@ class TrainingMimiModel(MimiModel):
         )
 
 class TrainingMimiProjectorModel(MimiModel):
-    def __init__(self, config, hidden_prj_size=512, output_prj_size=1024):
+    def __init__(self, config):
         super().__init__(config)
         print('hello TrainingMimiProjectorModel')
 
@@ -266,7 +266,7 @@ class TrainingMimiProjectorModel(MimiModel):
         self.quantizer = TrainingMimiSplitResidualVectorQuantizer(config)
 
         # Add a projection layer for the semantic token
-        self.semantic_token_projector = nn.Linear(hidden_prj_size, output_prj_size)
+        self.semantic_token_projector = nn.Linear(config.hidden_prj_size, config.output_prj_size)
 
     def _decode_frame(
         self,

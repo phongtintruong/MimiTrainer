@@ -199,7 +199,7 @@ class MimiTrainer(nn.Module):
                                  teacher_sampling_rate=self.teacher_sampling_rate,
                                  student_sampling_rate=self.sampling_rate, max_length_s=self.max_length_s)
         self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=not self.stream_val_data, drop_last=False,
-                                       num_workers=4, feature_extractor_student=generator_feature_extractor,
+                                       num_workers=2, feature_extractor_student=generator_feature_extractor,
                                        feature_extractor_teacher=teacher_feature_extractor,
                                        teacher_sampling_rate=self.teacher_sampling_rate,
                                        student_sampling_rate=self.sampling_rate, max_length_s=self.max_length_s)
