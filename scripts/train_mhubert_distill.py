@@ -2,7 +2,7 @@
 from mimitrainer.discriminators import MultiPeriodDiscriminator, MultiScaleDiscriminator, MultiScaleSTFTDiscriminator
 import json
 import argparse
-from mimitransformers import TrainingMimiModel, TrainingMimiProjectorModel
+from mimitransformers import TrainingMimiProjectorModel, TrainingMimiProjectorConfig
 from mimitrainer.discriminators import MultiPeriodDiscriminator, MultiScaleDiscriminator, MultiScaleSTFTDiscriminator
 import json
 from transformers import AutoFeatureExtractor
@@ -30,11 +30,12 @@ if __name__ == '__main__':
         raise FileNotFoundError(f"Config file not found at {CONFIG_PATH}")
 
     # Instantiate model and feature extractor
-    generator = TrainingMimiProjectorModel.from_pretrained("kyutai/mimi", hidden_prj_size=512, output_prj_size=768)
+    generator_config = TrainingMimiProjectorConfig.from_pretrained("config/spt_base_cfg.json")
+    generator = TrainingMimiProjectorModel.from_pretrained("kyutai/mimi", config=generator_config)
     feature_extractor = AutoFeatureExtractor.from_pretrained("kyutai/mimi")
 
-    processor = AutoFeatureExtractor.from_pretrained("utter-project/mHuBERT-147")
-    model = HubertModel.from_pretrained("utter-project/mHuBERT-147")
+    processor = AutoFeatureExtractor.from_pretrained(config["teacher_feature_extractor"])
+    model = HubertModel.from_pretrained(config["teacher_model_path"])
 
     discriminators = {
         'mpd': MultiPeriodDiscriminator(),
@@ -42,26 +43,12 @@ if __name__ == '__main__':
         'mstftd': MultiScaleSTFTDiscriminator(32)
     }
 
-    train_url = "https://huggingface.co/datasets/linhtran92/viet_bud500/resolve/main/data/train-00000-of-00105-be5f872f8be772f5.parquet"
-    val_url = "https://huggingface.co/datasets/linhtran92/viet_bud500/resolve/main/data/test-00000-of-00002-531c1d81edb57297.parquet"
-
-    train_data_files = {"train": train_url}
-    val_data_files = {'val': val_url}
-
     # Create trainer instance
     trainer = MimiTrainer(
-        epochs=500,
-        gradient_accumulation_steps=4,
-        batch_size=2,
-        train_audio_path='audio/raw',
-        val_audio_path='audio/raw',
         generator=generator,
         generator_feature_extractor=feature_extractor,
         teacher=model,
         teacher_feature_extractor=processor,
-        generator_sampling_rate=24000,
-        teacher_sampling_rate=16000,
-        max_length_s=3,
         discriminators=discriminators,
         cfg=config,
         accelerate_kwargs={'mixed_precision': 'fp16'},

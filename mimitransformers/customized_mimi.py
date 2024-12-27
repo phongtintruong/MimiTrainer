@@ -2,7 +2,7 @@ from typing import Optional, Union, List, Tuple
 from dataclasses import dataclass
 import torch
 from transformers.cache_utils import Cache, DynamicCache, SlidingWindowCache, StaticCache
-from transformers import MimiModel
+from transformers import MimiModel, MimiConfig
 from transformers.models.mimi.modeling_mimi import MimiSplitResidualVectorQuantizer, MimiOutput, MimiDecoderOutput, MimiModel
 from torch import nn
 
@@ -429,7 +429,11 @@ class TrainingMimiProjectorModel(MimiModel):
             decoder_past_key_values=decoder_past_key_values,
         )
     
-    # @classmethod
-    # def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
-    #     model = super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
-    #     return model
+class TrainingMimiProjectorConfig(MimiConfig):
+
+    model_type = "meomeo"
+
+    def __init__(self, hidden_prj_size=512, output_prj_size=1024, **kwargs):
+        super().__init__(**kwargs)
+        self.hidden_prj_size = hidden_prj_size
+        self.output_prj_size = output_prj_size

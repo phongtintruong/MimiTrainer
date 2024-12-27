@@ -17,14 +17,19 @@ import json
 import time
 from tqdm import tqdm
 from accelerate import Accelerator, DistributedDataParallelKwargs, DataLoaderConfiguration, DistributedType
-from transformers import AutoFeatureExtractor, PreTrainedModel, Wav2Vec2CTCTokenizer
-from transformers import EncodecFeatureExtractor, AutoProcessor, Wav2Vec2Processor
-import torchaudio
+from transformers import PreTrainedModel, EncodecFeatureExtractor
 from datasets import load_dataset  # Import Hugging Face datasets
-from typing import Union, Dict, Any
 
 
 # helpers
+def read_urls_from_file(filename):
+    urls = []
+    with open(filename, 'r') as file:
+        for line in file:
+            # Strip the newline character and append to the list
+            urls.append(line.strip())
+    return urls
+
 
 def exists(val):
     return val is not None
@@ -61,18 +66,10 @@ class MimiTrainer(nn.Module):
     @beartype
     def __init__(
             self,
-            gradient_accumulation_steps: int,
-            epochs,
-            batch_size,
-            train_audio_path,
-            val_audio_path,
             generator: PreTrainedModel,
             generator_feature_extractor: EncodecFeatureExtractor,
             teacher: PreTrainedModel,
             teacher_feature_extractor,
-            generator_sampling_rate,
-            teacher_sampling_rate,
-            max_length_s,
             discriminators: dict,
             cfg,
             accelerate_kwargs: dict = dict(),
@@ -87,14 +84,22 @@ class MimiTrainer(nn.Module):
         results_folder = cfg.get('results_folder')
         self.results_folder = Path(results_folder)
         self.num_ckpt_keep = cfg.get("num_ckpt_keep")
-        # self.epochs = cfg.get("epochs")
-        self.epochs = epochs
-        self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.epochs = cfg.get("epochs")
+        self.gradient_accumulation_steps = cfg.get("gradient_accumulation_steps")
         self.num_warmup_steps = cfg.get("num_warmup_steps")
-        # self.batch_size = cfg.get("batch_size")
-        self.batch_size = batch_size
-        self.sample_rate = 24000
+        self.batch_size = cfg.get("batch_size")
         self.showpiece_num = cfg.get('showpiece_num', 8)
+        self.sampling_rate = cfg.get('sampling_rate')
+        self.max_length_s = cfg.get('max_length_s')
+        self.teacher_sampling_rate = cfg.get('teacher_sampling_rate')
+        self.train_audio_path = cfg.get('train_audio_path')
+        self.val_audio_path = cfg.get('val_audio_path')
+        self.train_files = cfg.get("train_files", None)
+        self.val_files = cfg.get("val_files", None)
+        self.stream_train_data = cfg.get("stream_train_data", True)
+        self.stream_val_data = cfg.get("stream_val_data", False)
+        self.train_est_len = cfg.get("train_est_len", None)
+        self.val_est_len = cfg.get("val_est_len", None)
         project_name = 'MimiTrainer'
 
         if not self.results_folder.exists():
@@ -116,15 +121,10 @@ class MimiTrainer(nn.Module):
         if self.is_main:
             self.writer = tensorboard.SummaryWriter(os.path.join(results_folder, 'logs'))
 
-        self.train_audio_path = train_audio_path
-        self.val_audio_path = val_audio_path
         self.generator = generator
         self.generator_feature_extractor = generator_feature_extractor
         self.teacher = teacher
         self.teacher_feature_extractor = teacher_feature_extractor
-        self.generator_sampling_rate = generator_sampling_rate
-        self.teacher_sampling_rate = teacher_sampling_rate
-        self.max_length_s = max_length_s
         self.discriminators = discriminators
         for param in self.teacher.parameters():
             param.requires_grad = False
@@ -149,51 +149,60 @@ class MimiTrainer(nn.Module):
         mult = 1
         for i in range(len(self.mel_loss_lambdas)):
             self.mel_loss_kwargs_list.append(
-                {'n_fft': cfg.get('n_fft') // mult, 'num_mels': cfg.get('num_mels'), 'sample_rate': self.sample_rate,
+                {'n_fft': cfg.get('n_fft') // mult, 'num_mels': cfg.get('num_mels'), 'sample_rate': self.sampling_rate,
                  'hop_size': cfg.get('hop_size') // mult, 'win_size': cfg.get('win_size') // mult,
                  'fmin': cfg.get('fmin'),
                  'fmax': cfg.get('fmax_for_loss')})
             mult = mult * 2
-        self.mel_kwargs = {'n_fft': cfg.get('n_fft'), 'num_mels': cfg.get('num_mels'), 'sample_rate': self.sample_rate,
+        self.mel_kwargs = {'n_fft': cfg.get('n_fft'), 'num_mels': cfg.get('num_mels'), 'sample_rate': self.sampling_rate,
                            'hop_size': cfg.get('hop_size'), 'win_size': cfg.get('win_size'), 'fmin': cfg.get('fmin'),
                            'fmax': cfg.get('fmax')}
 
-        # Check if the datasets are Hugging Face datasets or local directories
-        if isinstance(train_audio_path, str) and os.path.isdir(train_audio_path):
-            # Local dataset
-            self.ds = RawAudioDataset(data_dir=train_audio_path, mode='train')
-        else:
-            # Hugging Face dataset
-            self.ds = load_dataset("parquet", data_files=train_audio_path)['train']
 
-        if isinstance(val_audio_path, str) and os.path.isdir(val_audio_path):
-            # Local dataset
-            self.valid_ds = RawAudioDataset(data_dir=val_audio_path, mode='val')
+        if self.train_audio_path == 'parquet':
+            train_urls = read_urls_from_file(self.train_files)
+            train_data_files = {"train": train_urls}
+            self.ds = load_dataset("parquet", data_files=train_data_files, streaming=self.stream_train_data)['train']
+        elif os.path.isdir(self.train_audio_path):
+            self.ds = RawAudioDataset(data_dir=self.train_audio_path, mode='train')
         else:
-            # Hugging Face dataset
-            self.valid_ds = load_dataset("parquet", data_files=val_audio_path)['val'].select(range(100))
+            self.ds = load_dataset(self.train_audio_path, split='train', streaming=self.stream_train_data)
+
+        if self.val_audio_path == 'parquet':
+            val_urls = read_urls_from_file(self.val_files)
+            val_data_files = {"val": val_urls}
+            self.valid_ds = load_dataset("parquet", data_files=val_data_files, streaming=self.stream_val_data)['val']
+        elif os.path.isdir(self.val_audio_path):    
+            self.valid_ds = RawAudioDataset(data_dir=self.val_audio_path, mode='val')
+        else:
+            self.valid_ds = load_dataset(self.val_audio_path, split='val', streaming=self.stream_val_data)
 
         if self.is_main:
-            self.print(
-                f'training with dataset of {len(self.ds)} samples and validating with {len(self.valid_ds)} samples')
+            if self.stream_train_data:
+                self.print(f'training with dataset:\n{self.ds}\nvaidating with:\n{self.valid_ds}')
+            else:
+                self.print(
+                    f'training with dataset of {len(self.ds)} samples and validating with {len(self.valid_ds)} samples')
 
-        assert len(self.ds) >= self.batch_size, 'dataset must have sufficient samples for training'
-        assert len(
-            self.valid_ds) >= self.batch_size, f'validation dataset must have sufficient number of samples (currently {len(self.valid_ds)}) for training'
+        if not self.stream_train_data:
+            assert len(self.ds) >= self.batch_size, 'dataset must have sufficient samples for training'
+        if not self.stream_val_data:
+            assert len(
+                self.valid_ds) >= self.batch_size, f'validation dataset must have sufficient number of samples (currently {len(self.valid_ds)}) for training'
 
         # dataloader
         drop_last = cfg.get("drop_last", True)
         num_workers = cfg.get("num_workers")
-        self.dl = get_dataloader(self.ds, batch_size=self.batch_size, shuffle=True, drop_last=drop_last,
+        self.dl = get_dataloader(self.ds, batch_size=self.batch_size, shuffle=not self.stream_train_data, drop_last=drop_last,
                                  num_workers=num_workers, feature_extractor_student=generator_feature_extractor,
                                  feature_extractor_teacher=teacher_feature_extractor,
-                                 teacher_sampling_rate=teacher_sampling_rate,
-                                 student_sampling_rate=generator_sampling_rate, max_length_s=max_length_s)
-        self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=False, drop_last=False,
+                                 teacher_sampling_rate=self.teacher_sampling_rate,
+                                 student_sampling_rate=self.sampling_rate, max_length_s=self.max_length_s)
+        self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=not self.stream_val_data, drop_last=False,
                                        num_workers=4, feature_extractor_student=generator_feature_extractor,
                                        feature_extractor_teacher=teacher_feature_extractor,
-                                       teacher_sampling_rate=teacher_sampling_rate,
-                                       student_sampling_rate=generator_sampling_rate, max_length_s=max_length_s)
+                                       teacher_sampling_rate=self.teacher_sampling_rate,
+                                       student_sampling_rate=self.sampling_rate, max_length_s=self.max_length_s)
 
         # lr
         self.lr = cfg.get("learning_rate")
@@ -216,7 +225,7 @@ class MimiTrainer(nn.Module):
 
         # scheduler
         # num_train_steps = epochs * self.ds.__len__() // (batch_size * grad_accum_every)
-        num_train_steps = self.epochs * self.ds.__len__() // batch_size
+        num_train_steps = self.epochs * self.train_est_len // (self.batch_size * self.gradient_accumulation_steps)
         self.scheduler_g = CosineAnnealingLR(self.optim_g, T_max=num_train_steps)
         self.scheduler_d = CosineAnnealingLR(self.optim_d, T_max=num_train_steps)
 
@@ -533,13 +542,13 @@ class MimiTrainer(nn.Module):
                                 if i < self.showpiece_num:
                                     if not self.plot_gt_once:
                                         self.log({f'groundtruth/x_{i}': x[0].cpu().detach()}, type='audio',
-                                                sample_rate=self.sample_rate, step=accumulated_steps)
+                                                sample_rate=self.sampling_rate, step=accumulated_steps)
                                         x_spec = mel_spectrogram(x.squeeze(1), **self.mel_kwargs)
                                         self.log({f'groundtruth/x_spec_{i}': plot_spectrogram(x_spec[0].cpu().numpy())},
                                                 type='figure', step=accumulated_steps)
 
                                     self.log({f'generate/x_hat_{i}': x_hat[0].cpu().detach()}, type='audio',
-                                            sample_rate=self.sample_rate, step=accumulated_steps)
+                                            sample_rate=self.sampling_rate, step=accumulated_steps)
                                     x_hat_spec = mel_spectrogram(x_hat.squeeze(1), **self.mel_kwargs)
                                     self.log({f'generate/x_hat_spec_{i}': plot_spectrogram(x_hat_spec[0].cpu().numpy())},
                                             type='figure', step=accumulated_steps)
