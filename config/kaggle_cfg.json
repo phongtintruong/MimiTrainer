@@ -33,9 +33,9 @@
 
     "results_folder": "Log/spt_base",
     "sampling_rate": 24000,
-    "batch_size": 8,
+    "batch_size": 4,
     "epochs":2,
-    "gradient_accumulation_steps": 32,
+    "gradient_accumulation_steps": 64,
     "learning_rate": 1e-4,
     "intial_learning_rate":1e-4,
     "num_warmup_steps":0,
