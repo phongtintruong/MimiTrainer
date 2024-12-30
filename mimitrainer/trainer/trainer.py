@@ -224,8 +224,10 @@ class MimiTrainer(nn.Module):
         )
 
         # scheduler
-        # num_train_steps = epochs * self.ds.__len__() // (batch_size * grad_accum_every)
-        num_train_steps = self.epochs * self.train_est_len // (self.batch_size * self.gradient_accumulation_steps)
+        if self.stream_train_data:
+            num_train_steps = self.epochs * self.train_est_len // (self.batch_size * self.gradient_accumulation_steps)
+        else:
+            num_train_steps = self.epochs * self.ds.__len__() // (self.batch_size * self.gradient_accumulation_steps)
         self.scheduler_g = CosineAnnealingLR(self.optim_g, T_max=num_train_steps)
         self.scheduler_d = CosineAnnealingLR(self.optim_d, T_max=num_train_steps)
 
@@ -603,6 +605,14 @@ class MimiTrainer(nn.Module):
                 del loss_generator_all
 
                 torch.cuda.empty_cache()
+
+            if epoch == self.epochs - 1:
+                # save model
+                model_path = str(self.results_folder / f'MimiTrainer_last')
+                self.save(model_path, total_mel_error / num)
+                self.print(f'{accumulated_steps}: saving model to {str(self.results_folder)}')
+                self.generator.train()
+                print('back to train')
 
         self.print('training complete')
 

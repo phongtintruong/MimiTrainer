@@ -33,7 +33,7 @@
     "sampling_rate": 24000,
     "batch_size": 2,
     "epochs":2,
-    "gradient_accumulation_steps": 1,
+    "gradient_accumulation_steps": 128,
     "learning_rate": 1e-4,
     "intial_learning_rate":1e-4,
     "num_warmup_steps":0,
@@ -44,9 +44,9 @@
     "max_length_s": 3,
     "wd": 0,
     "num_workers": 8,
-    "log_steps": 2,
-    "stdout_steps": 2,
-    "save_model_steps": 8,
+    "log_steps": 50,
+    "stdout_steps": 50,
+    "save_model_steps": 410,
     "num_ckpt_keep": 6,
     "showpiece_num": 8
 }
