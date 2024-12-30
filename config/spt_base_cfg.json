@@ -1,4 +1,6 @@
 {   
+    "find_unused_parameters": false,
+
     "hidden_prj_size": 512,
     "output_prj_size": 768,
 
@@ -45,7 +47,7 @@
     "wd": 0,
     "num_workers": 8,
     "log_steps": 50,
-    "stdout_steps": 50,
+    "stdout_steps": 1,
     "save_model_steps": 410,
     "num_ckpt_keep": 6,
     "showpiece_num": 8

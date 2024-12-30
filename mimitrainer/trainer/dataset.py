@@ -6,6 +6,8 @@ import torch
 import numpy as np
 import torchaudio.transforms as T
 import os
+import torch.nn.functional as F
+
 
 
 
@@ -140,23 +142,36 @@ def collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teac
         features_teacher (torch.Tensor): Preprocessed features for teacher.
         features_student (torch.Tensor): Preprocessed features for student.
     """
+    def pad_and_resample(waveform, sr, target_sr):
+        # Calculate the padding length
+        original_length = waveform.shape[-1]
+        nearest_higher_multiple = ((original_length + sr - 1) // sr) * sr
+        pad_length = nearest_higher_multiple - original_length
+        
+        # Pad the waveform
+        if pad_length > 0:
+            waveform = F.pad(waveform, (0, pad_length))  # Pad at the end
+        
+        # Resample
+        if sr != target_sr:
+            resampler = T.Resample(orig_freq=sr, new_freq=target_sr)
+            waveform = resampler(waveform)
+        
+        return waveform
     teacher_processed_batch = []
     student_processed_batch = []
     for item in batch:
         waveform, sr = item["audio"]["array"], item["audio"]["sampling_rate"]
+        # print('waveform shape')
+        # print(waveform.shape)
+        # print(sr)
+        # print('-'*50)
         # Convert numpy array to torch tensor if needed
         if isinstance(waveform, np.ndarray):
             waveform = torch.tensor(waveform, dtype=torch.float32)
 
-        if sr != student_sampling_rate:
-            waveform_student = T.Resample(orig_freq=sr, new_freq=student_sampling_rate)(waveform)
-        else:
-            waveform_student = waveform
-
-        if sr != teacher_sampling_rate:
-            waveform_teacher = T.Resample(orig_freq=sr, new_freq=teacher_sampling_rate)(waveform)
-        else:
-            waveform_teacher = waveform
+        waveform_student = pad_and_resample(waveform, sr, student_sampling_rate)
+        waveform_teacher = pad_and_resample(waveform, sr, teacher_sampling_rate)
 
         # Check for channel dimension and process accordingly
         if len(waveform_student.shape) > 1:  # Multi-channel
@@ -175,17 +190,6 @@ def collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teac
         # print('waveform_teacher shape')
         # # print(waveform.shape)
         # print(waveform_teacher.shape)
-    #
-    # Extract features for both teacher and student
-    features_teacher = feature_extractor_teacher(
-        teacher_processed_batch,
-        sampling_rate=teacher_sampling_rate,
-        max_length=teacher_sampling_rate * max_length_s,
-        truncation=True,
-        padding='max_length',
-        return_tensors="pt"
-    )["input_values"]
-
     # print(features_student.shape)
     # print(features_teacher.shape)
     # Compute max_length in terms of sample count
@@ -195,15 +199,33 @@ def collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teac
     all_shorter_than_max_length = all(len(waveform) <= max_length_samples for waveform in student_processed_batch)
 
     if all_shorter_than_max_length:
+        # print(teacher_processed_batch[0].shape)
+        # print(teacher_processed_batch[1].shape)
+        # print(student_processed_batch[0].shape)
+        # print(student_processed_batch[1].shape)
         # Use padding when all samples are short
+        # Extract features for both teacher and student
+        features_teacher = feature_extractor_teacher(
+            teacher_processed_batch,
+            sampling_rate=teacher_sampling_rate,
+            padding=True,
+            return_tensors="pt"
+        )["input_values"]
         features_student = feature_extractor_student(
             student_processed_batch,
             sampling_rate=student_sampling_rate,
-            max_length=max_length_samples,
-            padding='max_length',  # Pad to the same length
+            padding=True,  # Pad to the same length
             return_tensors="pt"
         )["input_values"]
     else:
+        features_teacher = feature_extractor_teacher(
+            teacher_processed_batch,
+            sampling_rate=teacher_sampling_rate,
+            max_length=teacher_sampling_rate * max_length_s,
+            truncation=True,
+            padding="max_length",
+            return_tensors="pt"
+        )["input_values"]
         # Use truncation when some samples exceed max_length
         features_student = feature_extractor_student(
             student_processed_batch,
@@ -212,6 +234,9 @@ def collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teac
             truncation=True,  # Truncate longer samples
             return_tensors="pt"
         )["input_values"]
+
+    # print(features_teacher.shape)
+    # print(features_student.shape)
 
     return features_student, features_teacher
 
