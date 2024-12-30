@@ -43,7 +43,7 @@
     "adam_b2": 0.9,
     "lr_decay": 0.98,
     "seed": 1234,
-    "max_length_s": 6,
+    "max_length_s": 5,
     "wd": 0,
     "num_workers": 8,
     "log_steps": 50,
