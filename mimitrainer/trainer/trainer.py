@@ -343,7 +343,9 @@ class MimiTrainer(nn.Module):
     def train(self):
         print(self.accelerator.gradient_accumulation_steps)
         self.generator.train()
-        map(lambda disc: disc.train(), self.discriminators.values())
+        for disc in self.discriminators.values():
+            disc.train()
+
         step_time_log = {}
 
         steps = int(self.steps.item())
@@ -358,132 +360,107 @@ class MimiTrainer(nn.Module):
 
         for epoch in range(self.epochs):
             if self.is_main:
-                print(f'Epoch:{epoch} start...')
+                print(f'Epoch {epoch} start...')
 
             for batch in self.dl:
-
                 tic = time.time()
                 x, inputs_teacher = batch
-                    # x = inputs_student.squeeze(0)
-                    # x = x.to(self.device)
-                    # inputs_student = inputs_student.to(self.device)
-                    # inputs_teacher = inputs_teacher.to(self.device)
-                    # print('x')
-                    # print(x)
-                    # print(x.shape)
-                    # print('inputs_student')
-                    # print(inputs_student)
-                    # print(inputs_student.shape)
-                    # print('inputs_teacher')
-                    # print(inputs_teacher)
-                    # print(inputs_teacher.shape)
+
+                # Forward pass for teacher
+                with torch.no_grad():
+                    outputs_teacher = self.teacher(inputs_teacher)
+                semantic_feature = nn.functional.pad(
+                    outputs_teacher.last_hidden_state.transpose(1, 2),
+                    pad=(4, 4),
+                    mode="reflect"
+                )
+                semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8, stride=4).transpose(1, 2)
+
+                # Generator forward pass
+                model_outs = self.generator(x)
+                x_hat, feature = model_outs.audio_values, model_outs.semantic_token
+
+                # Discriminator update
+                self.optim_d.zero_grad()
                 with self.accelerator.accumulate(self.discriminators):
-                    with torch.no_grad():
-                        outputs_teacher = self.teacher(inputs_teacher)
-                    semantic_feature = outputs_teacher.last_hidden_state
-                    # print('org teacher_semantic token')
-                    # print(semantic_feature.shape)
-                    semantic_feature = nn.functional.pad(
-                        semantic_feature.transpose(1, 2),  # Transpose to [Batch, Seq Length, Channels]
-                        pad=(4, 4),  # Symmetric padding
-                        mode="reflect"
-                    )
-                    semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8,
-                                                                stride=4).transpose(1, 2)
-                    # print('teacher semantic token')
-                    # print(semantic_feature)
-                    # print(semantic_feature.shape)
-                    model_outs = self.generator(x)
-                    x_hat, feature = model_outs.audio_values, model_outs.semantic_token
-                    # print('x_hat')
-                    # print(x_hat)
-                    # print(x_hat.shape)
-                    # print('feature')
-                    # print(feature)
-                    # print(feature.shape)
-                    # print(len(feature))
-                    # print('discretes')
-                    # print(discretes)
-                    # print(discretes.shape)
-
-                    # Discriminators
-                    self.optim_d.zero_grad()
-                    discriminator_outputs = list(map(lambda disc: disc(x, x_hat.detach()), self.discriminators.values()))
-                    loss_disc_all = sum(map(lambda x: discriminator_loss(*x[:2]), discriminator_outputs))
-
+                    discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
+                    loss_disc_all = sum(discriminator_loss(*output[:2]) for output in discriminator_outputs)
                     self.accelerator.backward(loss_disc_all)
                     self.optim_d.step()
-                    # Update lr
-                    self.steps += 1
-                    steps = int(self.steps.item())
-                    if steps % self.gradient_accumulation_steps == 0:
-                        accumulated_steps = steps // self.gradient_accumulation_steps
-                        if accumulated_steps < self.num_warmup_steps:
-                            lr = self.warmup(accumulated_steps)
-                            for param_group in self.optim_d.param_groups:
-                                param_group['lr'] = lr
-                        else:
-                            self.scheduler_d.step()
-                    
 
+                # Generator update
+                self.optim_g.zero_grad()
                 with self.accelerator.accumulate(self.generator):
-                    # Generator
-                    self.optim_g.zero_grad()
-                    discriminator_outputs = list(map(lambda disc: disc(x, x_hat), self.discriminators.values()))
+                    discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
                     loss_recon = recon_loss(x, x_hat)
-                    loss_mel = sum(map(lambda mel_k: mel_k[0] * mel_loss(x, x_hat, **mel_k[1]),
-                                    zip(self.mel_loss_lambdas, self.mel_loss_kwargs_list)))
-                    loss_feature = sum(map(lambda x: feature_loss(*x[2:]), discriminator_outputs))
-                    loss_adversarial = sum(map(lambda x: adversarial_loss(x[1]), discriminator_outputs))
+                    loss_mel = sum(
+                        mel_lambda * mel_loss(x, x_hat, **mel_kwargs)
+                        for mel_lambda, mel_kwargs in zip(self.mel_loss_lambdas, self.mel_loss_kwargs_list)
+                    )
+                    loss_feature = sum(feature_loss(*output[2:]) for output in discriminator_outputs)
+                    loss_adversarial = sum(adversarial_loss(output[1]) for output in discriminator_outputs)
                     loss_distill = self.distill_loss(feature, semantic_feature)
-                    loss_generator_all = loss_feature + loss_adversarial + loss_mel + loss_recon * self.recon_loss_lambda + self.distill_loss_lambda * loss_distill
+
+                    loss_generator_all = (
+                        loss_feature +
+                        loss_adversarial +
+                        loss_mel +
+                        loss_recon * self.recon_loss_lambda +
+                        loss_distill * self.distill_loss_lambda
+                    )
                     self.accelerator.backward(loss_generator_all)
-                    # if exists(self.max_grad_norm):
-                    #     self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                     self.optim_g.step()
-                    if steps % self.gradient_accumulation_steps == 0:
-                        accumulated_steps = steps // self.gradient_accumulation_steps
-                        if accumulated_steps < self.num_warmup_steps:
-                            lr = self.warmup(accumulated_steps)
-                            for param_group in self.optim_g.param_groups:
+
+                # Learning rate update
+                self.steps += 1
+                steps = int(self.steps.item())
+                if steps % self.gradient_accumulation_steps == 0:
+                    accumulated_steps = steps // self.gradient_accumulation_steps
+                    if accumulated_steps < self.num_warmup_steps:
+                        lr = self.warmup(accumulated_steps)
+                        for optim in [self.optim_d, self.optim_g]:
+                            for param_group in optim.param_groups:
                                 param_group['lr'] = lr
-                        else:
-                            self.scheduler_g.step()
-                            lr = self.scheduler_g.get_last_lr()[0]
+                    else:
+                        self.scheduler_d.step()
+                        self.scheduler_g.step()
+                        lr = self.scheduler_g.get_last_lr()[0]
 
-                # Remove the detached tensors from the computational graph
-                x = x.detach()
-                x_hat = x_hat.detach()
-
+                # Logging
                 step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
-                # self.accelerator.wait_for_everyone()
-
-                # log
                 if steps % self.gradient_accumulation_steps == 0:
                     accumulated_steps = steps // self.gradient_accumulation_steps
                     if self.is_main and not (accumulated_steps % self.stdout_steps):
-                        with torch.inference_mode():
+                        with torch.no_grad():
                             mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
                         self.print(
-                            f"Epoch {epoch} -- Step {accumulated_steps}: Gen Loss: {loss_generator_all.item():0.3f}; Mel Error:{mel_error:0.3f}; Distill Loss: {loss_distill.item():0.3f}; Time cost per step: {step_time_log['time_cost'] / self.stdout_steps:0.3f}s")
+                            f"Epoch {epoch} -- Step {accumulated_steps}: "
+                            f"Gen Loss: {loss_generator_all.item():0.3f}; "
+                            f"Mel Error: {mel_error:0.3f}; "
+                            f"Distill Loss: {loss_distill.item():0.3f}; "
+                            f"Time cost per step: {step_time_log['time_cost'] / self.stdout_steps:0.3f}s"
+                        )
                         step_time_log = {}
+
                     if self.is_main and not (accumulated_steps % self.log_steps):
-                        self.log({"train/discriminators loss": loss_disc_all.item(),
-                                "train/generator loss": loss_generator_all.item(),
-                                "train/feature loss": loss_feature.item(),
-                                "train/adversarial loss": loss_adversarial.item(), "train/mel loss": loss_mel.item(),
-                                "train/mel error": mel_error, "train/distillation loss": loss_distill.item(),
-                                "train/learning_rate": lr}, step=accumulated_steps)
+                        self.log({
+                            "train/discriminators loss": loss_disc_all.item(),
+                            "train/generator loss": loss_generator_all.item(),
+                            "train/feature loss": loss_feature.item(),
+                            "train/adversarial loss": loss_adversarial.item(),
+                            "train/mel loss": loss_mel.item(),
+                            "train/mel error": mel_error,
+                            "train/distillation loss": loss_distill.item(),
+                            "train/learning_rate": lr
+                        }, step=accumulated_steps)
 
                 self.accelerator.wait_for_everyone()
 
-                # validate and save model
+                # validation and save
                 if steps % self.gradient_accumulation_steps == 0:
                     accumulated_steps = steps // self.gradient_accumulation_steps
                     if self.is_main and not (accumulated_steps % self.save_model_steps) and accumulated_steps != 0:
-
                         self.print('Validation start ...')
-                        # validate
                         total_mel_error = 0.0
                         total_distill_loss = 0.0
                         num = 0
@@ -491,56 +468,23 @@ class MimiTrainer(nn.Module):
                         with torch.inference_mode():
                             for i, batch in tqdm(enumerate(self.valid_dl)):
                                 x, inputs_teacher = batch
-                                # x = inputs_student.squeeze(0)
-                                # x = x.to(self.device)
-                                # inputs_student = inputs_student.to(self.device)
-                                # inputs_teacher = inputs_teacher.to(self.device)
-                                # print('x')
-                                # print(x)
-                                # print(x.shape)
-                                # print('inputs_student')
-                                # print(inputs_student)
-                                # print(inputs_student.shape)
-                                # print('inputs_teacher')
-                                # print(inputs_teacher)
-                                # print(inputs_teacher.shape)
                                 with torch.no_grad():
                                     outputs_teacher = self.teacher(inputs_teacher)
-                                semantic_feature = outputs_teacher.last_hidden_state
-                                # print('org teacher_semantic token')
-                                # print(semantic_feature.shape)
                                 semantic_feature = nn.functional.pad(
-                                    semantic_feature.transpose(1, 2),  # Transpose to [Batch, Seq Length, Channels]
-                                    pad=(4, 4),  # Symmetric padding
+                                    outputs_teacher.last_hidden_state.transpose(1, 2),
+                                    pad=(4, 4),
                                     mode="reflect"
                                 )
-                                semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8,
-                                                                            stride=4).transpose(1, 2)
+                                semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8, stride=4).transpose(1, 2)
 
-                                # print(x.shape)
-                                # x = x.unsqueeze(1)
-                                # x = x.squeeze().numpy()
-
-                                # print('teacher semantic token')
-                                # print(semantic_feature)
-                                # print(semantic_feature.shape)
                                 model_outs = self.generator(x)
                                 x_hat, feature = model_outs.audio_values, model_outs.semantic_token
-                                # print('x_hat')
-                                # print(x_hat)
-                                # print(x_hat.shape)
-                                # print('feature')
-                                # print(feature)
-                                # print(feature.shape)
-                                # print(len(feature))
-                                # print('discretes')
-                                # print(discretes)
-                                # print(discretes.shape)
 
                                 mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
+                                distill_loss = self.distill_loss(feature, semantic_feature).item()
+
                                 total_mel_error += mel_error
-                                loss_distill = self.distill_loss(feature, semantic_feature).item()
-                                total_distill_loss += loss_distill
+                                total_distill_loss += distill_loss
                                 num += x.size(0)
                                 if i < self.showpiece_num:
                                     if not self.plot_gt_once:
@@ -566,56 +510,15 @@ class MimiTrainer(nn.Module):
                                 {'dev/mel error': total_mel_error / num, 'dev/distillation loss': total_distill_loss / num},
                                 step=accumulated_steps)
 
-                        # save model
-                        model_path = str(self.results_folder / f'MimiTrainer_{accumulated_steps:08d}')
-                        self.save(model_path, total_mel_error / num)
-                        self.print(f'{accumulated_steps}: saving model to {str(self.results_folder)}')
-                        self.generator.train()
-                        print('back to train')
-
-                # # Update lr
-                # self.steps += 1
-                # steps = int(self.steps.item())
-                # if steps < self.num_warmup_steps:
-                #     lr = self.warmup(steps)
-                #     for param_group in self.optim_g.param_groups:
-                #         param_group['lr'] = lr
-                #     for param_group in self.optim_d.param_groups:
-                #         param_group['lr'] = lr
-                # else:
-                #     self.scheduler_d.step()
-                #     self.scheduler_g.step()
-                #     lr = self.scheduler_g.get_last_lr()[0]
-
-                # Explicitly delete to manage memory
-                del x
-                # del inputs_student
-                del inputs_teacher
-                del semantic_feature
-                del model_outs
-                # del discretes
-                del x_hat
-                del feature
-                del discriminator_outputs
-                del loss_disc_all
-                del loss_recon
-                del loss_mel
-                del loss_feature
-                del loss_adversarial
-                del loss_distill
-                del loss_generator_all
-
-                torch.cuda.empty_cache()
-
+            # Save model at the end of the epoch
             if epoch == self.epochs - 1:
-                # save model
                 model_path = str(self.results_folder / f'MimiTrainer_last')
-                self.save(model_path, total_mel_error / num)
-                self.print(f'{accumulated_steps}: saving model to {str(self.results_folder)}')
+                self.save(model_path, loss_generator_all.item())
+                self.print(f'{epoch}: saving model to {str(self.results_folder)}')
                 self.generator.train()
-                print('back to train')
 
-        self.print('training complete')
+        self.print('Training complete')
+
 
     def continue_train(self):
         self.load()
