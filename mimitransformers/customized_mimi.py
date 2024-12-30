@@ -32,11 +32,11 @@ class TrainingMimiOutput(MimiOutput):
             have their past key value states given to this model).
     """
 
-    audio_codes: torch.LongTensor = None
+    # audio_codes: torch.LongTensor = None
     audio_values: torch.FloatTensor = None
     semantic_token: torch.FloatTensor = None
-    encoder_past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None
-    decoder_past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None
+    # encoder_past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None
+    # decoder_past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None
 
 
 @dataclass
@@ -419,14 +419,11 @@ class TrainingMimiProjectorModel(MimiModel):
         semantic_token = self.semantic_token_projector(semantic_token)
 
         if not return_dict:
-            return (audio_codes, audio_values, semantic_token, encoder_past_key_values, decoder_past_key_values)
+            return (audio_values, semantic_token)
 
         return TrainingMimiOutput(
-            audio_codes=audio_codes,
             audio_values=audio_values,
             semantic_token=semantic_token,
-            encoder_past_key_values=encoder_past_key_values,
-            decoder_past_key_values=decoder_past_key_values,
         )
     
 class TrainingMimiProjectorConfig(MimiConfig):
