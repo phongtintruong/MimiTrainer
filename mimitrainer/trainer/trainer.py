@@ -509,6 +509,13 @@ class MimiTrainer(nn.Module):
                             self.log(
                                 {'dev/mel error': total_mel_error / num, 'dev/distillation loss': total_distill_loss / num},
                                 step=accumulated_steps)
+                            
+                        # save model
+                        model_path = str(self.results_folder / f'MimiTrainer_{accumulated_steps:08d}')
+                        self.save(model_path, total_mel_error / num)
+                        self.print(f'{accumulated_steps}: saving model to {str(self.results_folder)}')
+                        self.generator.train()
+                        print('back to train')
 
             # Save model at the end of the epoch
             if epoch == self.epochs - 1:
