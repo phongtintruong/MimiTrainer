@@ -5,6 +5,9 @@ from transformers.cache_utils import Cache, DynamicCache, SlidingWindowCache, St
 from transformers import MimiModel, MimiConfig
 from transformers.models.mimi.modeling_mimi import MimiSplitResidualVectorQuantizer, MimiOutput, MimiDecoderOutput, MimiModel
 from torch import nn
+from transformers import PreTrainedModel
+from transformers.utils import cached_file, WEIGHTS_NAME, SAFE_WEIGHTS_NAME
+import safetensors.torch
 
 @dataclass
 class TrainingMimiOutput(MimiOutput):
@@ -425,6 +428,33 @@ class TrainingMimiProjectorModel(MimiModel):
             audio_values=audio_values,
             semantic_token=semantic_token,
         )
+    
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        # Load the custom config
+        config = TrainingMimiProjectorConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
+
+        # Instantiate the model
+        model = cls(config, *model_args, **kwargs)
+
+        # Check for state_dict
+        state_dict = kwargs.pop("state_dict", None)
+
+        # If no state_dict is provided, attempt to resolve it
+        if state_dict is None:
+            try:
+                # First, try to load safetensors weights
+                resolved_weights_file = cached_file(pretrained_model_name_or_path, SAFE_WEIGHTS_NAME)
+                state_dict = safetensors.torch.load_file(resolved_weights_file, device="cpu")
+            except (OSError, safetensors.torch.SafeTensorError):
+                # Fall back to pytorch_model.bin if safetensors are not available
+                resolved_weights_file = cached_file(pretrained_model_name_or_path, WEIGHTS_NAME)
+                state_dict = torch.load(resolved_weights_file, map_location="cpu")
+
+        # Load weights (adapt for any custom layers, if needed)
+        model.load_state_dict(state_dict, strict=False)
+
+        return model
     
 class TrainingMimiProjectorConfig(MimiConfig):
 
