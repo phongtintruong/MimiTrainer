@@ -19,7 +19,7 @@ if __name__ == '__main__':
     hf_token = os.getenv("HF_TOKEN")
     login(hf_token)
     # Configuration
-    CONFIG_PATH = "config/spt_base_cfg.json"  # Path to your config file
+    CONFIG_PATH = "config/local_overfit_cfg.json"  # Path to your config file
 
     # Load config from file
     config_file = Path(CONFIG_PATH)
@@ -30,7 +30,7 @@ if __name__ == '__main__':
         raise FileNotFoundError(f"Config file not found at {CONFIG_PATH}")
 
     # Instantiate model and feature extractor
-    generator_config = TrainingMimiProjectorConfig.from_pretrained("config/spt_base_cfg.json")
+    generator_config = TrainingMimiProjectorConfig.from_pretrained("config/local_overfit_cfg.json")
     generator = TrainingMimiProjectorModel.from_pretrained("kyutai/mimi", config=generator_config)
     feature_extractor = AutoFeatureExtractor.from_pretrained("kyutai/mimi")
 
