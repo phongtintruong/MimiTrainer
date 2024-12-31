@@ -1,6 +1,7 @@
+print('hello')
 import torch
 from transformers import MimiConfig
-from mimitransformers import TrainingMimiModel, TrainingMimiProjectorModel
+from mimitransformers import TrainingMimiProjectorModel, TrainingMimiProjectorConfig
 from huggingface_hub import login
 from dotenv import load_dotenv
 import os
@@ -12,6 +13,7 @@ if __name__ == '__main__':
     login(hf_token)
 
     torch.cuda.empty_cache()
+    print('start')
 
     def load_trained_model(generator_model, checkpoint_path, device='cuda'):
         # Load the checkpoint
@@ -25,8 +27,8 @@ if __name__ == '__main__':
 
         return generator_model
     
-    config = MimiConfig.from_pretrained("Log/spt_base/config.json")
-    generator = TrainingMimiProjectorModel(config=config, hidden_prj_size=512, output_prj_size=768)
+    config = TrainingMimiProjectorConfig.from_pretrained("Log/spt_base/config.json")
+    generator = TrainingMimiProjectorModel(config=config)
     checkpoint_path = 'Log/spt_base/Mimi_best_dev.pt'   
     generator = load_trained_model(generator, checkpoint_path, device='cuda')
 
@@ -34,7 +36,7 @@ if __name__ == '__main__':
     generator.eval()  # Set the model to evaluation mode
 
     generator.push_to_hub(
-        repo_id='phongtintruong/meomeo-mhubert-overfit-8-v0.2',  # Name of the repository
+        repo_id='phongtintruong/meomeo-mhubert-overfit-8-v0.3',  # Name of the repository
         use_temp_dir=True,                # Temporarily saves files before pushing
         commit_message="Initial commit",  # Optional commit message
     )
