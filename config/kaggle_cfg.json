@@ -46,9 +46,9 @@
     "max_length_s": 5,
     "wd": 0,
     "num_workers": 8,
-    "log_steps": 1,
-    "stdout_steps": 1,
-    "save_model_steps": 1,
-    "num_ckpt_keep": 6,
+    "log_steps": 10,
+    "stdout_steps": 10,
+    "save_model_steps": 20,
+    "num_ckpt_keep": 3,
     "showpiece_num": 8
 }
