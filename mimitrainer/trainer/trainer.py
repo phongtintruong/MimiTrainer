@@ -200,7 +200,7 @@ class MimiTrainer(nn.Module):
                                  teacher_sampling_rate=self.teacher_sampling_rate,
                                  student_sampling_rate=self.sampling_rate, max_length_s=self.max_length_s)
         self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=not self.stream_val_data, drop_last=False,
-                                       num_workers=0, feature_extractor_student=generator_feature_extractor,
+                                       num_workers=1, feature_extractor_student=generator_feature_extractor,
                                        feature_extractor_teacher=teacher_feature_extractor,
                                        teacher_sampling_rate=self.teacher_sampling_rate,
                                        student_sampling_rate=self.sampling_rate, max_length_s=self.max_length_s)
@@ -471,7 +471,10 @@ class MimiTrainer(nn.Module):
                                 x, inputs_teacher = batch
                                 # with torch.no_grad():
                                 outputs_teacher = self.teacher(inputs_teacher)
+                                print(f"inputs_teacher device: {inputs_teacher.device}")
                                 print('teacher output')
+                                inputs_teacher = inputs_teacher.to(self.device)
+                                print(f"inputs_teacher device: {inputs_teacher.device}")
                                 semantic_feature = nn.functional.pad(
                                     outputs_teacher.last_hidden_state.transpose(1, 2),
                                     pad=(4, 4),
