@@ -1,5 +1,5 @@
 {   
-    "find_unused_parameters": false,
+    "find_unused_parameters": true,
 
     "hidden_prj_size": 512,
     "output_prj_size": 768,
