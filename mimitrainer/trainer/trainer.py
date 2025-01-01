@@ -200,7 +200,7 @@ class MimiTrainer(nn.Module):
                                  teacher_sampling_rate=self.teacher_sampling_rate,
                                  student_sampling_rate=self.sampling_rate, max_length_s=self.max_length_s)
         self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=not self.stream_val_data, drop_last=False,
-                                       num_workers=2, feature_extractor_student=generator_feature_extractor,
+                                       num_workers=0, feature_extractor_student=generator_feature_extractor,
                                        feature_extractor_teacher=teacher_feature_extractor,
                                        teacher_sampling_rate=self.teacher_sampling_rate,
                                        student_sampling_rate=self.sampling_rate, max_length_s=self.max_length_s)
@@ -467,9 +467,11 @@ class MimiTrainer(nn.Module):
                         self.generator.eval()
                         with torch.inference_mode():
                             for i, batch in tqdm(enumerate(self.valid_dl)):
+                                print('validating')
                                 x, inputs_teacher = batch
-                                with torch.no_grad():
-                                    outputs_teacher = self.teacher(inputs_teacher)
+                                # with torch.no_grad():
+                                outputs_teacher = self.teacher(inputs_teacher)
+                                print('teacher output')
                                 semantic_feature = nn.functional.pad(
                                     outputs_teacher.last_hidden_state.transpose(1, 2),
                                     pad=(4, 4),
@@ -479,6 +481,7 @@ class MimiTrainer(nn.Module):
 
                                 model_outs = self.generator(x)
                                 x_hat, feature = model_outs.audio_values, model_outs.semantic_token
+                                print('generator output')
 
                                 mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
                                 distill_loss = self.distill_loss(feature, semantic_feature).item()
@@ -499,9 +502,9 @@ class MimiTrainer(nn.Module):
                                     x_hat_spec = mel_spectrogram(x_hat.squeeze(1), **self.mel_kwargs)
                                     self.log({f'generate/x_hat_spec_{i}': plot_spectrogram(x_hat_spec[0].cpu().numpy())},
                                             type='figure', step=accumulated_steps)
-                                # Remove the detached tensors from the computational graph
-                                x = x.detach()
-                                x_hat = x_hat.detach()
+                                # # Remove the detached tensors from the computational graph
+                                # x = x.detach()
+                                # x_hat = x_hat.detach()
                             if not self.plot_gt_once:
                                 self.plot_gt_once = True
                             self.print(
