@@ -428,13 +428,15 @@ class TrainingMimiProjectorModel(MimiModel):
             audio_values=audio_values,
             semantic_token=semantic_token,
         )
-    
+
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
-        # Load the custom config
-        config = TrainingMimiProjectorConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        # Get the config from pretrained model
+        config = kwargs.pop("config", None)
+        if config is None:
+            config = TrainingMimiProjectorConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
 
-        # Instantiate the model
+        # Instantiate the model with the config
         model = cls(config, *model_args, **kwargs)
 
         # Check for state_dict
