@@ -7,7 +7,7 @@ from beartype import beartype
 
 import torch
 from torch import nn
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from transformers import get_cosine_schedule_with_warmup
 
 from .dataset import get_dataloader, RawAudioDataset
 from .optimizer import get_optimizer
@@ -229,8 +229,19 @@ class MimiTrainer(nn.Module):
             num_train_steps = self.epochs * self.train_est_len // (self.batch_size * self.gradient_accumulation_steps)
         else:
             num_train_steps = self.epochs * self.ds.__len__() // (self.batch_size * self.gradient_accumulation_steps)
-        self.scheduler_g = CosineAnnealingLR(self.optim_g, T_max=num_train_steps)
-        self.scheduler_d = CosineAnnealingLR(self.optim_d, T_max=num_train_steps)
+        # self.scheduler_g = CosineAnnealingLR(self.optim_g, T_max=num_train_steps)
+        # self.scheduler_d = CosineAnnealingLR(self.optim_d, T_max=num_train_steps)
+        self.scheduler_g = get_cosine_schedule_with_warmup(
+            self.optim_g,
+            num_warmup_steps=self.num_warmup_steps,
+            num_training_steps=num_train_steps
+        )
+
+        self.scheduler_d = get_cosine_schedule_with_warmup(
+            self.optim_d,
+            num_warmup_steps=self.num_warmup_steps,
+            num_training_steps=num_train_steps
+        )
 
         # prepare with accelerator
 
@@ -323,11 +334,11 @@ class MimiTrainer(nn.Module):
     def is_local_main(self):
         return self.accelerator.is_local_main_process
 
-    def warmup(self, step):
-        if step < self.num_warmup_steps:
-            return self.initial_lr + (self.lr - self.initial_lr) * step / self.num_warmup_steps
-        else:
-            return self.lr
+    # def warmup(self, step):
+    #     if step < self.num_warmup_steps:
+    #         return self.initial_lr + (self.lr - self.initial_lr) * step / self.num_warmup_steps
+    #     else:
+    #         return self.lr
 
     def log(self, values: dict, step, type=None, **kwargs):
         if type == 'figure':
@@ -349,14 +360,18 @@ class MimiTrainer(nn.Module):
         step_time_log = {}
 
         steps = int(self.steps.item())
-        if steps < self.num_warmup_steps:
-            lr = self.warmup(steps)
-            for param_group in self.optim.param_groups:
-                param_group['lr'] = lr
-        else:
-            self.scheduler_d.step()
-            self.scheduler_g.step()
-            lr = self.scheduler_d.get_last_lr()[0]
+        # if steps < self.num_warmup_steps:
+        #     lr = self.warmup(steps)
+        #     for param_group in self.optim_d.param_groups:
+        #         param_group['lr'] = lr
+        #     for param_group in self.optim_g.param_groups:
+        #         param_group['lr'] = lr
+        # else:
+        #     self.scheduler_d.step()
+        #     self.scheduler_g.step()
+        #     lr = self.scheduler_d.get_last_lr()[0]
+
+        lr = self.scheduler_g.get_last_lr()[0]
 
         for epoch in range(self.epochs):
             if self.is_main:
@@ -387,6 +402,7 @@ class MimiTrainer(nn.Module):
                     loss_disc_all = sum(discriminator_loss(*output[:2]) for output in discriminator_outputs)
                     self.accelerator.backward(loss_disc_all)
                     self.optim_d.step()
+                    self.scheduler_d.step()
 
                 # Generator update
                 self.optim_g.zero_grad()
@@ -410,21 +426,24 @@ class MimiTrainer(nn.Module):
                     )
                     self.accelerator.backward(loss_generator_all)
                     self.optim_g.step()
+                    self.scheduler_g.step()
 
                 # Learning rate update
                 self.steps += 1
                 steps = int(self.steps.item())
-                if steps % self.gradient_accumulation_steps == 0:
-                    accumulated_steps = steps // self.gradient_accumulation_steps
-                    if accumulated_steps < self.num_warmup_steps:
-                        lr = self.warmup(accumulated_steps)
-                        for optim in [self.optim_d, self.optim_g]:
-                            for param_group in optim.param_groups:
-                                param_group['lr'] = lr
-                    else:
-                        self.scheduler_d.step()
-                        self.scheduler_g.step()
-                        lr = self.scheduler_g.get_last_lr()[0]
+                lr = self.scheduler_g.get_last_lr()[0]
+                # if steps % self.gradient_accumulation_steps == 0:
+                #     accumulated_steps = steps // self.gradient_accumulation_steps
+                #     if accumulated_steps < self.num_warmup_steps:
+                #         lr = self.warmup(accumulated_steps)
+                #         for optim in [self.optim_d, self.optim_g]:
+                #             for param_group in optim.param_groups:
+                #                 param_group['lr'] = lr
+                #     else:
+                #         self.scheduler_d.step()
+                #         self.scheduler_g.step()
+                #         lr = self.scheduler_g.get_last_lr()[0]
+
 
                 # Logging
                 step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
@@ -467,14 +486,14 @@ class MimiTrainer(nn.Module):
                         self.generator.eval()
                         with torch.inference_mode():
                             for i, batch in tqdm(enumerate(self.valid_dl)):
-                                print('validating')
+                                # print('validating')
                                 x, inputs_teacher = batch
                                 # with torch.no_grad():
                                 outputs_teacher = self.teacher(inputs_teacher)
-                                print(f"inputs_teacher device: {inputs_teacher.device}")
-                                print('teacher output')
-                                inputs_teacher = inputs_teacher.to(self.device)
-                                print(f"inputs_teacher device: {inputs_teacher.device}")
+                                # print(f"inputs_teacher device: {inputs_teacher.device}")
+                                # print('teacher output')
+                                # inputs_teacher = inputs_teacher.to(self.device)
+                                # print(f"inputs_teacher device: {inputs_teacher.device}")
                                 semantic_feature = nn.functional.pad(
                                     outputs_teacher.last_hidden_state.transpose(1, 2),
                                     pad=(4, 4),
@@ -484,7 +503,7 @@ class MimiTrainer(nn.Module):
 
                                 model_outs = self.generator(x)
                                 x_hat, feature = model_outs.audio_values, model_outs.semantic_token
-                                print('generator output')
+                                # print('generator output')
 
                                 mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
                                 distill_loss = self.distill_loss(feature, semantic_feature).item()
