@@ -1,5 +1,6 @@
 /.idea
 .env
+.venv
 test*
 *__pycache__*
 *egg-info/
