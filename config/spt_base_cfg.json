@@ -1,8 +1,8 @@
 {   
     "find_unused_parameters": false,
 
-    "hidden_prj_size": 512,
-    "output_prj_size": 768,
+    "max_nq": 8,
+    "quantization_rate": 0.5,
 
     "teacher_model_path": "utter-project/mHuBERT-147",
     "teacher_feature_extractor": "utter-project/mHuBERT-147",
@@ -33,21 +33,29 @@
 
     "results_folder": "Log/spt_base",
     "sampling_rate": 24000,
+
     "batch_size": 2,
     "epochs":2,
     "gradient_accumulation_steps": 128,
-    "learning_rate": 1e-4,
-    "intial_learning_rate":1e-4,
+
+    "learning_rate": 8e-4,
+    "initial_learning_rate":8e-4,
     "num_warmup_steps":500,
-    "betas":[0.9, 0.99],
-    "adam_b2": 0.9,
+    "betas":[0.5, 0.9],
+    "ema_decay": 0.99,
+    "ema_freq": 1,
+    "ema_generator": true,
+    "ema_discriminators": false,
+    "wd": 5e-2,
+    "wd_module": ["encoder_transformer", "decoder_transformer"],
+    "wd_ndim": 2,
+
     "seed": 1234,
     "max_length_s": 4,
-    "wd": 5e-2,
     "num_workers": 8,
-    "log_steps": 1,
-    "stdout_steps": 1,
-    "save_model_steps": 1,
-    "num_ckpt_keep": 5,
+    "log_steps": 50,
+    "stdout_steps": 50,
+    "save_model_steps": 200,
+    "num_ckpt_keep": 6,
     "showpiece_num": 8
 }

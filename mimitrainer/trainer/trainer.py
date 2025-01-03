@@ -10,7 +10,7 @@ from torch import nn
 from transformers import get_cosine_schedule_with_warmup
 
 from .dataset import get_dataloader, RawAudioDataset
-from .optimizer import get_optimizer
+from .optimizer import get_optimizer_with_ema
 from torch.utils import tensorboard
 from .loss import *
 import json
@@ -19,6 +19,7 @@ from tqdm import tqdm
 from accelerate import Accelerator, DistributedDataParallelKwargs, DataLoaderConfiguration, DistributedType
 from transformers import PreTrainedModel, EncodecFeatureExtractor
 from datasets import load_dataset  # Import Hugging Face datasets
+import random
 
 
 # helpers
@@ -101,6 +102,12 @@ class MimiTrainer(nn.Module):
         self.stream_val_data = cfg.get("stream_val_data", False)
         self.train_est_len = cfg.get("train_est_len", None)
         self.val_est_len = cfg.get("val_est_len", None)
+        self.ema_freq = cfg.get("ema_freq", 1)
+        self.ema_generator = cfg.get("ema_generator", True)
+        self.ema_discriminators = cfg.get("ema_discriminators", False)
+
+        self.max_nq = cfg.get('max_nq', 8)
+        self.quantization_rate = cfg.get('quantization_rate', 0.5)
         project_name = 'MimiTrainer'
 
         if not self.results_folder.exists():
@@ -207,22 +214,53 @@ class MimiTrainer(nn.Module):
 
         # lr
         self.lr = cfg.get("learning_rate")
-        self.initial_lr = cfg.get("intial_learning_rate")
+        self.initial_lr = cfg.get("initial_learning_rate")
 
         # optimizer
-        self.optim_g = get_optimizer(
-            generator.parameters(),
-            lr=cfg.get("learning_rate"),
-            wd=cfg.get("wd"),
-            betas=cfg.get("betas")
-        )
+        if self.ema_generator:
+            self.optim_g, self.ema_g = get_optimizer_with_ema(
+                self.generator,
+                lr=cfg.get("learning_rate"),
+                wd=cfg.get("wd"),
+                betas=cfg.get("betas"),
+                use_ema=True,
+                ema_decay=cfg.get("ema_decay"),
+                wd_module=cfg.get("wd_module"),
+                wd_ndim=cfg.get("wd_ndim")
+            )
+        else:
+            self.optim_g = get_optimizer_with_ema(
+                self.generator,
+                lr=cfg.get("learning_rate"),
+                wd=cfg.get("wd"),
+                betas=cfg.get("betas"),
+                use_ema=False,
+                ema_decay=cfg.get("ema_decay"),
+                wd_module=cfg.get("wd_module"),
+                wd_ndim=cfg.get("wd_ndim")
+            )
 
-        self.optim_d = get_optimizer(
-            itertools.chain(*[i.parameters() for i in self.discriminators.values()]),
-            lr=cfg.get("learning_rate"),
-            wd=cfg.get("wd"),
-            betas=cfg.get("betas")
-        )
+        if self.ema_discriminators:
+            self.optim_d, self.ema_ds = get_optimizer_with_ema(
+                self.discriminators,
+                lr=cfg.get("learning_rate"),
+                wd=cfg.get("wd"),
+                betas=cfg.get("betas"),
+                use_ema=True,
+                ema_decay=cfg.get("ema_decay"),
+                wd_module=cfg.get("wd_module"),
+                wd_ndim=cfg.get("wd_ndim")
+            )
+            self.optim_d = get_optimizer_with_ema(
+                self.discriminators,
+                lr=cfg.get("learning_rate"),
+                wd=cfg.get("wd"),
+                betas=cfg.get("betas"),
+                use_ema=False,
+                ema_decay=cfg.get("ema_decay"),
+                wd_module=cfg.get("wd_module"),
+                wd_ndim=cfg.get("wd_ndim")
+            )
 
         # scheduler
         if self.stream_train_data:
@@ -267,6 +305,10 @@ class MimiTrainer(nn.Module):
             self.valid_dl
         )
         self.discriminators = {k: self.accelerator.prepare(v) for k, v in self.discriminators.items()}
+        if self.ema_generator:
+            self.ema_g = self.accelerator.prepare(self.ema_g)
+        if self.ema_discriminators:
+            self.ema_ds = {k: self.accelerator.prepare(v) for k, v in self.ema_ds.items()}
 
         hps = {"num_train_steps": num_train_steps, "num_warmup_steps": self.num_warmup_steps, "learning_rate": self.lr,
                "initial_learning_rate": self.initial_lr, "epochs": self.epochs}
@@ -278,9 +320,12 @@ class MimiTrainer(nn.Module):
         if best_dev_mel_loss < self.best_dev_mel_loss:
             self.best_dev_mel_loss = best_dev_mel_loss
             torch.save(self.accelerator.get_state_dict(self.generator), f'{self.results_folder}/Mimi_best_dev.pt')
+
         ckpts = sorted(Path(path).parent.glob(f'MimiTrainer_*'))
         if len(ckpts) > self.num_ckpt_keep:
             [os.remove(c) for c in ckpts[:-self.num_ckpt_keep]]
+
+        # Prepare dictionary for saving all the necessary models, optimizers, and EMA states
         pkg = dict(
             generator=self.accelerator.get_state_dict(self.generator),
             discriminators={k: self.accelerator.get_state_dict(v) for k, v in self.discriminators.items()},
@@ -290,23 +335,37 @@ class MimiTrainer(nn.Module):
             scheduler_d=self.scheduler_d.state_dict(),
             best_dev_mel_loss=self.best_dev_mel_loss
         )
+
+        # Include EMA models in the saved dictionary if they exist
+        if self.ema_generator:
+            pkg['ema_generator'] = self.accelerator.get_state_dict(self.ema_g)
+
+        if self.ema_discriminators:
+            pkg['ema_discriminators'] = {k: self.accelerator.get_state_dict(v) for k, v in self.ema_ds.items()}
+
         torch.save(pkg, path)
+
 
     def load(self, path=None, restore_optimizer=True):
         if not exists(path):
             ckpts = sorted(self.results_folder.glob(f'MimiTrainer_*'))
             path = str(ckpts[-1])
+
         generator = self.accelerator.unwrap_model(self.generator)
         pkg = torch.load(path, map_location='cpu')
+
+        # Load the main generator and discriminators
         generator.load_state_dict(pkg['generator'])
         discriminators = {k: self.accelerator.unwrap_model(v) for k, v in self.discriminators.items()}
         map(lambda kv: kv[1].load_state_dict(pkg['discriminators'][kv[0]]), discriminators.items())
 
+        # If optimizer and scheduler need to be restored
         if restore_optimizer:
             self.optim_d.load_state_dict(pkg['optim_d'])
             self.scheduler_d.load_state_dict(pkg['scheduler_d'])
             self.optim_g.load_state_dict(pkg['optim_g'])
             self.scheduler_g.load_state_dict(pkg['scheduler_g'])
+
             if 'best_dev_mel_loss' in pkg.keys():
                 self.best_dev_mel_loss = pkg['best_dev_mel_loss']
                 if self.is_main:
@@ -314,6 +373,14 @@ class MimiTrainer(nn.Module):
 
             # + 1 to start from the next step and avoid overwriting the last checkpoint
             self.steps = torch.tensor([checkpoint_num_steps(path) + 1], device=self.device)
+
+        # Load EMA models if they exist in the checkpoint
+        if 'ema_generator' in pkg and self.ema_generator:
+            self.ema_g.load_state_dict(pkg['ema_generator'])
+
+        if 'ema_discriminators' in pkg and self.ema_discriminators:
+            for k, v in self.ema_ds.items():
+                v.load_state_dict(pkg['ema_discriminators'][k])
 
     def print(self, msg):
         self.accelerator.print(msg)
@@ -392,7 +459,8 @@ class MimiTrainer(nn.Module):
                 semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8, stride=4).transpose(1, 2)
 
                 # Generator forward pass
-                model_outs = self.generator(x)
+                nq = random.randint(1, self.max_nq)
+                model_outs = self.generator(x, num_quantizers=nq)
                 x_hat, feature = model_outs.audio_values, model_outs.semantic_token
 
                 # Discriminator update
@@ -403,6 +471,9 @@ class MimiTrainer(nn.Module):
                     self.accelerator.backward(loss_disc_all)
                     self.optim_d.step()
                     self.scheduler_d.step()
+                    if self.ema_discriminators:
+                        for name, ema_disc in self.ema_ds.items():
+                            ema_disc.update_parameters(self.discriminators[name])
 
                 # Generator update
                 self.optim_g.zero_grad()
@@ -427,6 +498,8 @@ class MimiTrainer(nn.Module):
                     self.accelerator.backward(loss_generator_all)
                     self.optim_g.step()
                     self.scheduler_g.step()
+                    if self.ema_generator:
+                        self.ema_g.update_parameters(self.generator)
 
                 # Learning rate update
                 self.steps += 1
