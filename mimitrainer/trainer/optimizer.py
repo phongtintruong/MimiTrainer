@@ -93,7 +93,7 @@ def get_optimizer_with_ema(
     if use_ema:
         # Set up EMA for all models (discriminators in this case)
         # You need to create a dictionary of averaged models for EMA
-        ema_models = {name: AveragedModel(model, avg_fn=lambda avg_param, param: ema_decay * avg_param + (1 - ema_decay) * param)
+        ema_models = {name: AveragedModel(model, avg_fn=lambda avg_param, param, n_averaged: ema_decay * avg_param + (1 - ema_decay) * param)
                       for name, model in zip(model_names, models)}
 
         return optimizer, ema_models

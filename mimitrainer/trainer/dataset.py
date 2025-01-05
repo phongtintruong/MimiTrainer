@@ -221,7 +221,7 @@ def collate_fn(batch, feature_extractor_teacher, feature_extractor_student, teac
         features_teacher = feature_extractor_teacher(
             teacher_processed_batch,
             sampling_rate=teacher_sampling_rate,
-            max_length=teacher_sampling_rate * max_length_s,
+            max_length=int(teacher_sampling_rate * max_length_s),
             truncation=True,
             padding="max_length",
             return_tensors="pt"

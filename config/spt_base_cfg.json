@@ -35,7 +35,7 @@
     "sampling_rate": 24000,
 
     "batch_size": 2,
-    "epochs":2,
+    "epochs":3,
     "gradient_accumulation_steps": 128,
 
     "learning_rate": 8e-4,
@@ -51,11 +51,11 @@
     "wd_ndim": 2,
 
     "seed": 1234,
-    "max_length_s": 4,
+    "max_length_s": 3.5,
     "num_workers": 8,
-    "log_steps": 50,
-    "stdout_steps": 50,
-    "save_model_steps": 200,
+    "log_steps": 20,
+    "stdout_steps": 20,
+    "save_model_steps": 50,
     "num_ckpt_keep": 6,
     "showpiece_num": 8
 }

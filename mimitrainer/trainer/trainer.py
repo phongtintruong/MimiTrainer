@@ -121,6 +121,7 @@ class MimiTrainer(nn.Module):
         self.accelerator = Accelerator(
             gradient_accumulation_steps=self.gradient_accumulation_steps,
             dataloader_config=dataloader_config,
+            # mixed_precision="fp16",
             kwargs_handlers=[ddp_kwargs],
             # log_with=tracker,
             **accelerate_kwargs
@@ -228,6 +229,7 @@ class MimiTrainer(nn.Module):
                 wd_module=cfg.get("wd_module"),
                 wd_ndim=cfg.get("wd_ndim")
             )
+            self.ema_g = self.ema_g['model_0'] # hard code will be changed later
         else:
             self.optim_g = get_optimizer_with_ema(
                 self.generator,
@@ -251,6 +253,7 @@ class MimiTrainer(nn.Module):
                 wd_module=cfg.get("wd_module"),
                 wd_ndim=cfg.get("wd_ndim")
             )
+        else:
             self.optim_d = get_optimizer_with_ema(
                 self.discriminators,
                 lr=cfg.get("learning_rate"),
@@ -317,7 +320,7 @@ class MimiTrainer(nn.Module):
         self.plot_gt_once = False
 
     def save(self, path, best_dev_mel_loss):
-        if best_dev_mel_loss < self.best_dev_mel_loss:
+        if best_dev_mel_loss <= self.best_dev_mel_loss:
             self.best_dev_mel_loss = best_dev_mel_loss
             torch.save(self.accelerator.get_state_dict(self.generator), f'{self.results_folder}/Mimi_best_dev.pt')
 
@@ -459,9 +462,16 @@ class MimiTrainer(nn.Module):
                 semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8, stride=4).transpose(1, 2)
 
                 # Generator forward pass
-                nq = random.randint(1, self.max_nq)
-                model_outs = self.generator(x, num_quantizers=nq)
-                x_hat, feature = model_outs.audio_values, model_outs.semantic_token
+                if int(self.steps.item()) % self.gradient_accumulation_steps == 0:
+                    do_quantize = random.choices([True, False], weights=[self.quantization_rate, 1 - self.quantization_rate], k=1)[0]
+                    nq = random.randint(2, self.max_nq+1) #hard code will be changed later
+                    # print('nq', nq)
+                    # print('do_quantize', do_quantize)
+                model_outs = self.generator(input_values=x, num_quantizers=nq, do_quantize=do_quantize)
+                x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
+                # print('x', x.shape)
+                # print('x_hat', x_hat.shape)
+                # print('feature', feature.shape)
 
                 # Discriminator update
                 self.optim_d.zero_grad()
@@ -521,7 +531,7 @@ class MimiTrainer(nn.Module):
                 # Logging
                 step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
                 if steps % self.gradient_accumulation_steps == 0:
-                    accumulated_steps = steps // self.gradient_accumulation_steps
+                    accumulated_steps = steps // self.gradient_accumulation_steps - 1
                     if self.is_main and not (accumulated_steps % self.stdout_steps):
                         with torch.no_grad():
                             mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
@@ -550,8 +560,8 @@ class MimiTrainer(nn.Module):
 
                 # validation and save
                 if steps % self.gradient_accumulation_steps == 0:
-                    accumulated_steps = steps // self.gradient_accumulation_steps
-                    if self.is_main and not (accumulated_steps % self.save_model_steps) and accumulated_steps != 0:
+                    accumulated_steps = steps // self.gradient_accumulation_steps - 1
+                    if self.is_main and not (accumulated_steps % self.save_model_steps):
                         self.print('Validation start ...')
                         total_mel_error = 0.0
                         total_distill_loss = 0.0
@@ -574,8 +584,8 @@ class MimiTrainer(nn.Module):
                                 )
                                 semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8, stride=4).transpose(1, 2)
 
-                                model_outs = self.generator(x)
-                                x_hat, feature = model_outs.audio_values, model_outs.semantic_token
+                                model_outs = self.generator(input_values=x, num_quantizers=self.max_nq, do_quantize=True)
+                                x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
                                 # print('generator output')
 
                                 mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
@@ -610,7 +620,7 @@ class MimiTrainer(nn.Module):
                             
                         # save model
                         model_path = str(self.results_folder / f'MimiTrainer_{accumulated_steps:08d}')
-                        self.save(model_path, total_mel_error / num)
+                        self.save(model_path, (total_mel_error / num) + (total_distill_loss / num) * 2)
                         self.print(f'{accumulated_steps}: saving model to {str(self.results_folder)}')
                         self.generator.train()
                         print('back to train')
@@ -618,7 +628,7 @@ class MimiTrainer(nn.Module):
             # Save model at the end of the epoch
             if epoch == self.epochs - 1:
                 model_path = str(self.results_folder / f'MimiTrainer_last')
-                self.save(model_path, loss_generator_all.item())
+                self.save(model_path, self.best_dev_mel_loss + 1)
                 self.print(f'{epoch}: saving model to {str(self.results_folder)}')
                 self.generator.train()
 
