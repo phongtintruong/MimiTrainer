@@ -465,8 +465,8 @@ class MimiTrainer(nn.Module):
                 if int(self.steps.item()) % self.gradient_accumulation_steps == 0:
                     do_quantize = random.choices([True, False], weights=[self.quantization_rate, 1 - self.quantization_rate], k=1)[0]
                     nq = random.randint(2, self.max_nq+1) #hard code will be changed later
-                    # print('nq', nq)
-                    # print('do_quantize', do_quantize)
+                    print('nq', nq)
+                    print('do_quantize', do_quantize)
                 model_outs = self.generator(input_values=x, num_quantizers=nq, do_quantize=do_quantize)
                 x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
                 # print('x', x.shape)
@@ -561,7 +561,7 @@ class MimiTrainer(nn.Module):
                 # validation and save
                 if steps % self.gradient_accumulation_steps == 0:
                     accumulated_steps = steps // self.gradient_accumulation_steps - 1
-                    if self.is_main and not (accumulated_steps % self.save_model_steps):
+                    if self.is_main and not (accumulated_steps % self.save_model_steps) and accumulated_steps != 0:
                         self.print('Validation start ...')
                         total_mel_error = 0.0
                         total_distill_loss = 0.0

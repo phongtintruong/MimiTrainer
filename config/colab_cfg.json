@@ -1,0 +1,57 @@
+{   
+    "find_unused_parameters": false,
+
+    "max_nq": 8,
+    "quantization_rate": 0.5,
+
+    "teacher_model_path": "utter-project/mHuBERT-147",
+    "teacher_feature_extractor": "utter-project/mHuBERT-147",
+    "teacher_sampling_rate": 16000,
+
+    "num_mels": 80,
+    "n_fft": 1024,
+    "hop_size": 240,
+    "win_size": 1024,
+    "fmin": 0,
+    "fmax": 8000,
+    "fmax_for_loss": null,
+    "mel_loss_lambdas": [45, 1, 1, 1],
+    "recon_loss_lambda": 500,
+    "commitment_loss_lambda": 10,
+
+    "distill_loss_lambda": 120,
+    "distill_type": "d_axis",
+
+    "train_audio_path": "/content/drive/MyDrive/Moshi/audio/train",
+    "val_audio_path": "/content/drive/MyDrive/Moshi/audio/eval",
+    "stream_train_data": false,
+    "stream_val_data": false,
+
+    "results_folder": "Log/spt_base",
+    "sampling_rate": 24000,
+
+    "batch_size": 2,
+    "epochs":1000,
+    "gradient_accumulation_steps": 8,
+
+    "learning_rate": 8e-4,
+    "initial_learning_rate":8e-4,
+    "num_warmup_steps":10,
+    "betas":[0.5, 0.9],
+    "ema_decay": 0.99,
+    "ema_freq": 1,
+    "ema_generator": true,
+    "ema_discriminators": false,
+    "wd": 5e-2,
+    "wd_module": ["encoder_transformer", "decoder_transformer"],
+    "wd_ndim": 2,
+
+    "seed": 1234,
+    "max_length_s": 3.5,
+    "num_workers": 8,
+    "log_steps": 20,
+    "stdout_steps": 20,
+    "save_model_steps": 50,
+    "num_ckpt_keep": 3,
+    "showpiece_num": 8
+}

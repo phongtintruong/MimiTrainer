@@ -2,25 +2,21 @@
 from mimitrainer.discriminators import MultiPeriodDiscriminator, MultiScaleDiscriminator, MultiScaleSTFTDiscriminator
 import json
 import argparse
-from mimitransformers import TrainingMimiModel, TrainingMimiProjectorModel
+from mimitransformers import MeomeoModel, MeomeoConfig
 from mimitrainer.discriminators import MultiPeriodDiscriminator, MultiScaleDiscriminator, MultiScaleSTFTDiscriminator
 import json
 from transformers import AutoFeatureExtractor
 from mimitrainer.trainer import MimiTrainer
 from pathlib import Path
-from transformers import AutoProcessor, WavLMModel
+from transformers import AutoFeatureExtractor, HubertModel
 from huggingface_hub import login
-from dotenv import load_dotenv
-import os
 
-load_dotenv()
 
 if __name__ == '__main__':
-    hf_token = os.getenv("HF_TOKEN")
-    login(hf_token)
+    login('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')
 
     # Configuration
-    CONFIG_PATH = "config/spt_base_cfg.json"  # Path to your config file
+    CONFIG_PATH = "config/colab_cfg.json"  # Path to your config file
 
     # Load config from file
     config_file = Path(CONFIG_PATH)
@@ -31,11 +27,12 @@ if __name__ == '__main__':
         raise FileNotFoundError(f"Config file not found at {CONFIG_PATH}")
 
     # Instantiate model and feature extractor
-    generator = TrainingMimiProjectorModel.from_pretrained("kyutai/mimi")
+    generator_config = MeomeoConfig.from_pretrained("config/meomeo_cfg.json")
+    generator = MeomeoModel(config=generator_config)
     feature_extractor = AutoFeatureExtractor.from_pretrained("kyutai/mimi")
 
-    processor = AutoProcessor.from_pretrained("patrickvonplaten/wavlm-libri-clean-100h-large")
-    model = WavLMModel.from_pretrained("patrickvonplaten/wavlm-libri-clean-100h-large")
+    processor = AutoFeatureExtractor.from_pretrained(config["teacher_feature_extractor"])
+    model = HubertModel.from_pretrained(config["teacher_model_path"])
 
     discriminators = {
         'mpd': MultiPeriodDiscriminator(),
@@ -45,17 +42,10 @@ if __name__ == '__main__':
 
     # Create trainer instance
     trainer = MimiTrainer(
-        epochs=2,
-        batch_size=2,
-        train_audio_path='/content/drive/MyDrive/Moshi/audio/train',
-        val_audio_path='/content/drive/MyDrive/Moshi/audio/eval',
         generator=generator,
         generator_feature_extractor=feature_extractor,
         teacher=model,
         teacher_feature_extractor=processor,
-        generator_sampling_rate=24000,
-        teacher_sampling_rate=16000,
-        max_length_s=3,
         discriminators=discriminators,
         cfg=config,
         accelerate_kwargs={'mixed_precision': 'fp16'},
