@@ -462,11 +462,14 @@ class MimiTrainer(nn.Module):
                 semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8, stride=4).transpose(1, 2)
 
                 # Generator forward pass
-                if int(self.steps.item()) % self.gradient_accumulation_steps == 0:
-                    do_quantize = random.choices([True, False], weights=[self.quantization_rate, 1 - self.quantization_rate], k=1)[0]
-                    nq = random.randint(2, self.max_nq+1) #hard code will be changed later
-                    print('nq', nq)
-                    print('do_quantize', do_quantize)
+                # if int(self.steps.item()) % self.gradient_accumulation_steps == 0:
+                #     do_quantize = random.choices([True, False], weights=[self.quantization_rate, 1 - self.quantization_rate], k=1)[0]
+                #     nq = random.randint(2, self.max_nq+1) #hard code will be changed later
+                #     print('nq', nq)
+                #     print('do_quantize', do_quantize)
+
+                do_quantize = random.choices([True, False], weights=[self.quantization_rate, 1 - self.quantization_rate], k=1)[0]
+                nq = random.randint(1, self.max_nq+1)
                 model_outs = self.generator(input_values=x, num_quantizers=nq, do_quantize=do_quantize)
                 x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
                 # print('x', x.shape)
