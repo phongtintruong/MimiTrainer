@@ -448,6 +448,7 @@ class MimiTrainer(nn.Module):
                 print(f'Epoch {epoch} start...')
 
             for batch in self.dl:
+                self.generator.train()
                 tic = time.time()
                 x, inputs_teacher = batch
 
@@ -477,7 +478,6 @@ class MimiTrainer(nn.Module):
                 # print('feature', feature.shape)
 
                 # Discriminator update
-                self.optim_d.zero_grad()
                 with self.accelerator.accumulate(self.discriminators):
                     discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
                     loss_disc_all = sum(discriminator_loss(*output[:2]) for output in discriminator_outputs)
@@ -487,9 +487,9 @@ class MimiTrainer(nn.Module):
                     if self.ema_discriminators:
                         for name, ema_disc in self.ema_ds.items():
                             ema_disc.update_parameters(self.discriminators[name])
+                    self.optim_d.zero_grad()
 
                 # Generator update
-                self.optim_g.zero_grad()
                 with self.accelerator.accumulate(self.generator):
                     discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
                     loss_recon = recon_loss(x, x_hat)
@@ -513,6 +513,7 @@ class MimiTrainer(nn.Module):
                     self.scheduler_g.step()
                     if self.ema_generator:
                         self.ema_g.update_parameters(self.generator)
+                    self.optim_g.zero_grad()
 
                 # Learning rate update
                 self.steps += 1
@@ -564,7 +565,7 @@ class MimiTrainer(nn.Module):
                 # validation and save
                 if steps % self.gradient_accumulation_steps == 0:
                     accumulated_steps = steps // self.gradient_accumulation_steps - 1
-                    if self.is_main and not (accumulated_steps % self.save_model_steps) and accumulated_steps != 0:
+                    if self.is_main and not (accumulated_steps % self.save_model_steps) and accumulated_steps != 0: #??
                         self.print('Validation start ...')
                         total_mel_error = 0.0
                         total_distill_loss = 0.0
@@ -625,7 +626,7 @@ class MimiTrainer(nn.Module):
                         model_path = str(self.results_folder / f'MimiTrainer_{accumulated_steps:08d}')
                         self.save(model_path, (total_mel_error / num) + (total_distill_loss / num) * 2)
                         self.print(f'{accumulated_steps}: saving model to {str(self.results_folder)}')
-                        self.generator.train()
+                        # self.generator.train()
                         print('back to train')
 
             # Save model at the end of the epoch
@@ -633,7 +634,7 @@ class MimiTrainer(nn.Module):
                 model_path = str(self.results_folder / f'MimiTrainer_last')
                 self.save(model_path, self.best_dev_mel_loss + 1)
                 self.print(f'{epoch}: saving model to {str(self.results_folder)}')
-                self.generator.train()
+                # self.generator.train()
 
         self.print('Training complete')
 
