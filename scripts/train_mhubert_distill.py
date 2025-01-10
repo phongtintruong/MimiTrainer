@@ -38,8 +38,8 @@ if __name__ == '__main__':
     model = HubertModel.from_pretrained(config["teacher_model_path"])
 
     discriminators = {
-        'mpd': MultiPeriodDiscriminator(),
-        'msd': MultiScaleDiscriminator(),
+        # 'mpd': MultiPeriodDiscriminator(),
+        # 'msd': MultiScaleDiscriminator(),
         'mstftd': MultiScaleSTFTDiscriminator(32)
     }
 
@@ -51,7 +51,7 @@ if __name__ == '__main__':
         teacher_feature_extractor=processor,
         discriminators=discriminators,
         cfg=config,
-        accelerate_kwargs={'mixed_precision': 'fp16'},
+        accelerate_kwargs={},
     )
 
     # Start training (or continue training)

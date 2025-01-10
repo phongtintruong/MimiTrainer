@@ -81,7 +81,7 @@ class MimiTrainer(nn.Module):
         torch.manual_seed(cfg.get('seed'))
         split_batches = cfg.get("split_batches", True)
         self.log_steps = cfg.get('log_steps')
-        self.stdout_steps = cfg.get('stdout_steps')
+        # self.stdout_steps = cfg.get('stdout_steps')
         self.save_model_steps = cfg.get('save_model_steps')
         results_folder = cfg.get('results_folder')
         self.results_folder = Path(results_folder)
@@ -146,6 +146,8 @@ class MimiTrainer(nn.Module):
         # self.commitment_loss_lambda = cfg.get('commitment_loss_lambda')
         self.recon_loss_lambda = cfg.get('recon_loss_lambda')
         self.distill_loss_lambda = cfg.get('distill_loss_lambda')
+        self.feature_loss_lambda = cfg.get('feature_loss_lambda')
+        self.adversarial_loss_lambda = cfg.get('adversarial_loss_lambda')
         distill_type = cfg.get('distill_type', 'd_axis')
         if distill_type == 't_axis':
             from functools import partial
@@ -214,14 +216,14 @@ class MimiTrainer(nn.Module):
                                        student_sampling_rate=self.sampling_rate, max_length_s=self.max_length_s)
 
         # lr
-        self.lr = cfg.get("learning_rate")
-        self.initial_lr = cfg.get("initial_learning_rate")
+        self.lr = cfg.get("generator_learning_rate")
+        self.initial_lr = cfg.get("initial_generator_learning_rate")
 
         # optimizer
         if self.ema_generator:
             self.optim_g, self.ema_g = get_optimizer_with_ema(
                 self.generator,
-                lr=cfg.get("learning_rate"),
+                lr=cfg.get("generator_learning_rate"),
                 wd=cfg.get("wd"),
                 betas=cfg.get("betas"),
                 use_ema=True,
@@ -233,7 +235,7 @@ class MimiTrainer(nn.Module):
         else:
             self.optim_g = get_optimizer_with_ema(
                 self.generator,
-                lr=cfg.get("learning_rate"),
+                lr=cfg.get("generator_learning_rate"),
                 wd=cfg.get("wd"),
                 betas=cfg.get("betas"),
                 use_ema=False,
@@ -245,7 +247,7 @@ class MimiTrainer(nn.Module):
         if self.ema_discriminators:
             self.optim_d, self.ema_ds = get_optimizer_with_ema(
                 self.discriminators,
-                lr=cfg.get("learning_rate"),
+                lr=cfg.get("disciminators_learning_rate"),
                 wd=cfg.get("wd"),
                 betas=cfg.get("betas"),
                 use_ema=True,
@@ -256,7 +258,7 @@ class MimiTrainer(nn.Module):
         else:
             self.optim_d = get_optimizer_with_ema(
                 self.discriminators,
-                lr=cfg.get("learning_rate"),
+                lr=cfg.get("discriminators_learning_rate"),
                 wd=cfg.get("wd"),
                 betas=cfg.get("betas"),
                 use_ema=False,
@@ -265,23 +267,29 @@ class MimiTrainer(nn.Module):
                 wd_ndim=cfg.get("wd_ndim")
             )
 
+        self.disc_batch_iterate = cfg.get('disc_batch_iterate', 8)
+        self.generator_batch_skip = cfg.get('generator_batch_skip', 2)
+
         # scheduler
         if self.stream_train_data:
-            num_train_steps = self.epochs * self.train_est_len // (self.batch_size * self.gradient_accumulation_steps)
+            num_disc_train_steps = self.epochs * self.train_est_len * self.disc_batch_iterate // (self.gradient_accumulation_steps * self.batch_size)
+            num_gen_train_steps = self.epochs * self.train_est_len // (self.gradient_accumulation_steps * self.batch_size * self.generator_batch_skip)
         else:
-            num_train_steps = self.epochs * self.ds.__len__() // (self.batch_size * self.gradient_accumulation_steps)
+            # num_train_steps = self.epochs * self.ds.__len__() // (self.gradient_accumulation_steps * self.batch_size)
+            num_disc_train_steps = self.epochs * len(self.ds) * self.disc_batch_iterate // (self.gradient_accumulation_steps * self.batch_size)
+            num_gen_train_steps = self.epochs * len(self.ds) // (self.gradient_accumulation_steps * self.batch_size * self.generator_batch_skip)
         # self.scheduler_g = CosineAnnealingLR(self.optim_g, T_max=num_train_steps)
         # self.scheduler_d = CosineAnnealingLR(self.optim_d, T_max=num_train_steps)
         self.scheduler_g = get_cosine_schedule_with_warmup(
             self.optim_g,
-            num_warmup_steps=self.num_warmup_steps,
-            num_training_steps=num_train_steps
+            num_warmup_steps=int(self.num_warmup_steps*num_gen_train_steps),
+            num_training_steps=num_gen_train_steps  
         )
 
         self.scheduler_d = get_cosine_schedule_with_warmup(
             self.optim_d,
-            num_warmup_steps=self.num_warmup_steps,
-            num_training_steps=num_train_steps
+            num_warmup_steps=int(self.num_warmup_steps*num_disc_train_steps),
+            num_training_steps=num_disc_train_steps
         )
 
         # prepare with accelerator
@@ -313,7 +321,7 @@ class MimiTrainer(nn.Module):
         if self.ema_discriminators:
             self.ema_ds = {k: self.accelerator.prepare(v) for k, v in self.ema_ds.items()}
 
-        hps = {"num_train_steps": num_train_steps, "num_warmup_steps": self.num_warmup_steps, "learning_rate": self.lr,
+        hps = {"num_train_steps": num_gen_train_steps, "num_warmup_steps": self.num_warmup_steps, "learning_rate": self.lr,
                "initial_learning_rate": self.initial_lr, "epochs": self.epochs}
         self.accelerator.init_trackers("Meomeo", config=hps)
         self.best_dev_mel_loss = float('inf')
@@ -443,11 +451,21 @@ class MimiTrainer(nn.Module):
 
         lr = self.scheduler_g.get_last_lr()[0]
 
+        avg_generator_loss = 0.
+        # avg_mel_loss = 0.
+        avg_distill_loss = 0.
+
+        avg_disc_loss = 0.
+        avg_feature_loss = 0.
+        avg_adversarial_loss = 0.
+        # avg_recon_loss = 0.
+
         for epoch in range(self.epochs):
             if self.is_main:
                 print(f'Epoch {epoch} start...')
 
             for batch in self.dl:
+                # print('batch step', steps)
                 self.generator.train()
                 tic = time.time()
                 x, inputs_teacher = batch
@@ -473,51 +491,76 @@ class MimiTrainer(nn.Module):
                 nq = random.randint(1, self.max_nq+1)
                 model_outs = self.generator(input_values=x, num_quantizers=nq, do_quantize=do_quantize)
                 x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
+                if torch.isnan(feature).any():
+                    print("NaN detected in feature (student embedding)")
+                    # Add more specific debugging to pinpoint where in the generator it occurs
+                if torch.isnan(semantic_feature).any():
+                    print("NaN detected in target_feature (teacher embedding)")
                 # print('x', x.shape)
                 # print('x_hat', x_hat.shape)
                 # print('feature', feature.shape)
+                for i in range(self.disc_batch_iterate):
+                    # print('disc step', steps)
+                    # Discriminator update
+                    with self.accelerator.accumulate(self.discriminators):
+                        discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
+                        loss_disc_all = sum(discriminator_loss(*output[:2]) for output in discriminator_outputs)
+                        avg_disc_loss += loss_disc_all.item()
+                        self.accelerator.backward(loss_disc_all)
+                        self.optim_d.step()
+                        self.scheduler_d.step()
+                        if self.ema_discriminators:
+                            for name, ema_disc in self.ema_ds.items():
+                                ema_disc.update_parameters(self.discriminators[name])
+                        self.optim_d.zero_grad()
+                    if self.accelerator.sync_gradients and self.is_main:
+                        disc_step = (steps - 1) * self.disc_batch_iterate + i + 1
+                        print('step', steps, 'disc_step', disc_step)
+                        print(f"Disc Loss: {self.accelerator.gather(avg_disc_loss / self.gradient_accumulation_steps)}")
+                        avg_disc_loss = 0.
 
-                # Discriminator update
-                with self.accelerator.accumulate(self.discriminators):
-                    discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
-                    loss_disc_all = sum(discriminator_loss(*output[:2]) for output in discriminator_outputs)
-                    self.accelerator.backward(loss_disc_all)
-                    self.optim_d.step()
-                    self.scheduler_d.step()
-                    if self.ema_discriminators:
-                        for name, ema_disc in self.ema_ds.items():
-                            ema_disc.update_parameters(self.discriminators[name])
-                    self.optim_d.zero_grad()
 
                 # Generator update
-                with self.accelerator.accumulate(self.generator):
-                    discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
-                    loss_recon = recon_loss(x, x_hat)
-                    loss_mel = sum(
-                        mel_lambda * mel_loss(x, x_hat, **mel_kwargs)
-                        for mel_lambda, mel_kwargs in zip(self.mel_loss_lambdas, self.mel_loss_kwargs_list)
-                    )
-                    loss_feature = sum(feature_loss(*output[2:]) for output in discriminator_outputs)
-                    loss_adversarial = sum(adversarial_loss(output[1]) for output in discriminator_outputs)
-                    loss_distill = self.distill_loss(feature, semantic_feature)
+                if int(self.steps.item()) % self.generator_batch_skip == 0:
+                    with self.accelerator.accumulate(self.generator):
+                        discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
+                        # loss_recon = recon_loss(x, x_hat)
+                        # loss_mel = sum(
+                        #     mel_lambda * mel_loss(x, x_hat, **mel_kwargs)
+                        #     for mel_lambda, mel_kwargs in zip(self.mel_loss_lambdas, self.mel_loss_kwargs_list)
+                        # )
+                        loss_feature = sum(feature_loss(*output[2:]) for output in discriminator_outputs)
+                        loss_adversarial = sum(adversarial_loss(output[1]) for output in discriminator_outputs)
+                        loss_distill = self.distill_loss(feature, semantic_feature)
 
-                    loss_generator_all = (
-                        loss_feature +
-                        loss_adversarial +
-                        loss_mel +
-                        loss_recon * self.recon_loss_lambda +
-                        loss_distill * self.distill_loss_lambda
-                    )
-                    self.accelerator.backward(loss_generator_all)
-                    self.optim_g.step()
-                    self.scheduler_g.step()
-                    if self.ema_generator:
-                        self.ema_g.update_parameters(self.generator)
-                    self.optim_g.zero_grad()
+                        # loss_generator_all = (
+                        #     loss_feature +
+                        #     loss_adversarial +
+                        #     loss_mel +
+                        #     loss_recon * self.recon_loss_lambda +
+                        #     loss_distill * self.distill_loss_lambda
+                        # )
+                        loss_generator_all = (
+                            loss_feature * self.feature_loss_lambda +
+                            loss_adversarial * self.adversarial_loss_lambda +
+                            loss_distill * self.distill_loss_lambda
+                        )
+                        avg_generator_loss += loss_generator_all.item()
+                        # avg_mel_loss += loss_mel.item()
+                        avg_distill_loss += loss_distill.item()
+                        avg_feature_loss += loss_feature.item()
+                        avg_adversarial_loss += loss_adversarial.item()
+                        # avg_recon_loss = loss_recon.item()
+                        self.accelerator.backward(loss_generator_all)
+                        self.optim_g.step()
+                        self.scheduler_g.step()
+                        if self.ema_generator:
+                            self.ema_g.update_parameters(self.generator)
+                        self.optim_g.zero_grad()
 
-                # Learning rate update
                 self.steps += 1
                 steps = int(self.steps.item())
+                # Learning rate update
                 lr = self.scheduler_g.get_last_lr()[0]
                 # if steps % self.gradient_accumulation_steps == 0:
                 #     accumulated_steps = steps // self.gradient_accumulation_steps
@@ -530,45 +573,79 @@ class MimiTrainer(nn.Module):
                 #         self.scheduler_d.step()
                 #         self.scheduler_g.step()
                 #         lr = self.scheduler_g.get_last_lr()[0]
-
-
-                # Logging
                 step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
-                if steps % self.gradient_accumulation_steps == 0:
-                    accumulated_steps = steps // self.gradient_accumulation_steps - 1
-                    if self.is_main and not (accumulated_steps % self.stdout_steps):
-                        with torch.no_grad():
-                            mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
+                if self.accelerator.sync_gradients and self.is_main and not (steps % self.generator_batch_skip):
+                    # print('steps', steps)
+                    generator_accumulated_steps = steps // (self.generator_batch_skip * self.gradient_accumulation_steps)
+                    if not (generator_accumulated_steps % self.log_steps):
                         self.print(
                             f"Epoch {epoch} -- Step {accumulated_steps}: "
-                            f"Gen Loss: {loss_generator_all.item():0.3f}; "
-                            f"Mel Error: {mel_error:0.3f}; "
-                            f"Distill Loss: {loss_distill.item():0.3f}; "
-                            f"Time cost per step: {step_time_log['time_cost'] / self.stdout_steps:0.3f}s"
+                            f"Gen Loss: {self.accelerator.gather(avg_generator_loss / (self.gradient_accumulation_steps * self.log_steps))}; "
+                            # f"Mel Error: {self.accelerator.gather(avg_mel_loss / (self.gradient_accumulation_steps * self.log_steps))}; "
+                            f"Distill Loss: {self.accelerator.gather(avg_distill_loss / (self.gradient_accumulation_steps * self.log_steps))}; "
+                            # f"Recon Loss: {self.accelerator.gather(avg_recon_loss / (self.gradient_accumulation_steps * self.log_steps))}; "
+                            f"Feature Loss: {self.accelerator.gather(avg_feature_loss / (self.gradient_accumulation_steps * self.log_steps))}; "
+                            f"Adversarial Loss: {self.accelerator.gather(avg_adversarial_loss / (self.gradient_accumulation_steps * self.log_steps))}; "
+                            # f"Disc Loss: {self.accelerator.gather(avg_disc_loss / (5 * self.gradient_accumulation_steps * self.log_steps))}; "
+                            f"learning rate: {lr}; "
+                            f"Time cost per step: {step_time_log['time_cost'] / self.log_steps:0.3f}s"
                         )
-                        step_time_log = {}
-
-                    if self.is_main and not (accumulated_steps % self.log_steps):
                         self.log({
-                            "train/discriminators loss": loss_disc_all.item(),
-                            "train/generator loss": loss_generator_all.item(),
-                            "train/feature loss": loss_feature.item(),
-                            "train/adversarial loss": loss_adversarial.item(),
-                            "train/mel loss": loss_mel.item(),
-                            "train/mel error": mel_error,
-                            "train/distillation loss": loss_distill.item(),
+                            # "train/discriminators loss": self.accelerator.gather(avg_disc_loss / (self.gradient_accumulation_steps * self.log_steps)),
+                            "train/generator loss": self.accelerator.gather(avg_generator_loss / (self.gradient_accumulation_steps * self.log_steps)),
+                            "train/feature loss": self.accelerator.gather(avg_feature_loss / (self.gradient_accumulation_steps * self.log_steps)),
+                            "train/adversarial loss": self.accelerator.gather(avg_adversarial_loss / (self.gradient_accumulation_steps * self.log_steps)),
+                            # "train/mel loss": self.accelerator.gather(avg_mel_loss / (self.gradient_accumulation_steps * self.log_steps)),
+                            "train/distillation loss": self.accelerator.gather(avg_distill_loss / (self.gradient_accumulation_steps * self.log_steps)),
                             "train/learning_rate": lr
                         }, step=accumulated_steps)
+                        step_time_log = {}
+                        avg_distill_loss = 0.
+                        # avg_mel_loss = 0.
+                        avg_generator_loss = 0.
+                        # avg_disc_loss = 0.
+                        avg_feature_loss = 0.
+                        avg_adversarial_loss = 0.
+                        # avg_recon_loss = 0.
+
+                # # Logging
+                # step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
+                # if steps % self.gradient_accumulation_steps == 0:
+                #     accumulated_steps = steps // self.gradient_accumulation_steps - 1
+                #     if self.is_main and not (accumulated_steps % self.stdout_steps):
+                #         with torch.no_grad():
+                #             mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
+                #         self.print(
+                #             f"Epoch {epoch} -- Step {accumulated_steps}: "
+                #             f"Gen Loss: {loss_generator_all.item():0.3f}; "
+                #             f"Mel Error: {mel_error:0.3f}; "
+                #             f"Distill Loss: {loss_distill.item():0.3f}; "
+                #             f"Time cost per step: {step_time_log['time_cost'] / self.stdout_steps:0.3f}s"
+                #         )
+                #         step_time_log = {}
+
+                #     if self.is_main and not (accumulated_steps % self.log_steps):
+                #         self.log({
+                #             "train/discriminators loss": loss_disc_all.item(),
+                #             "train/generator loss": loss_generator_all.item(),
+                #             "train/feature loss": loss_feature.item(),
+                #             "train/adversarial loss": loss_adversarial.item(),
+                #             "train/mel loss": loss_mel.item(),
+                #             "train/mel error": mel_error,
+                #             "train/distillation loss": loss_distill.item(),
+                #             "train/learning_rate": lr
+                #         }, step=accumulated_steps)
 
                 self.accelerator.wait_for_everyone()
 
                 # validation and save
-                if steps % self.gradient_accumulation_steps == 0:
-                    accumulated_steps = steps // self.gradient_accumulation_steps - 1
-                    if self.is_main and not (accumulated_steps % self.save_model_steps) and accumulated_steps != 0: #??
+                if self.is_main and not (steps % (self.generator_batch_skip * self.gradient_accumulation_steps)):
+                    accumulated_steps = steps % (self.generator_batch_skip * self.gradient_accumulation_steps)
+                    if not (accumulated_steps % self.save_model_steps):
                         self.print('Validation start ...')
                         total_mel_error = 0.0
                         total_distill_loss = 0.0
+                        total_recon_loss = 0.0
                         num = 0
                         self.generator.eval()
                         with torch.inference_mode():
@@ -594,9 +671,11 @@ class MimiTrainer(nn.Module):
 
                                 mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
                                 distill_loss = self.distill_loss(feature, semantic_feature).item()
+                                loss_recon = recon_loss(x, x_hat).item()
 
                                 total_mel_error += mel_error
                                 total_distill_loss += distill_loss
+                                total_recon_loss += loss_recon
                                 num += x.size(0)
                                 if i < self.showpiece_num:
                                     if not self.plot_gt_once:
@@ -617,14 +696,14 @@ class MimiTrainer(nn.Module):
                             if not self.plot_gt_once:
                                 self.plot_gt_once = True
                             self.print(
-                                f'{accumulated_steps}: dev mel error: {total_mel_error / num:0.3f}\tdev distill loss: {total_distill_loss / num:0.3f}')
+                                f'{accumulated_steps}: recon loss: {total_recon_loss / num}\tdev mel error: {total_mel_error / num}\tdev distill loss: {total_distill_loss / num}')
                             self.log(
                                 {'dev/mel error': total_mel_error / num, 'dev/distillation loss': total_distill_loss / num},
                                 step=accumulated_steps)
                             
                         # save model
                         model_path = str(self.results_folder / f'MimiTrainer_{accumulated_steps:08d}')
-                        self.save(model_path, (total_mel_error / num) + (total_distill_loss / num) * 2)
+                        self.save(model_path, (total_distill_loss / num) + (total_recon_loss / num) * 2)
                         self.print(f'{accumulated_steps}: saving model to {str(self.results_folder)}')
                         # self.generator.train()
                         print('back to train')
