@@ -102,16 +102,17 @@ class MeomeoResidualVectorQuantizer(MimiResidualVectorQuantizer):
 
         num_quantizers = num_quantizers if num_quantizers is not None else self.num_quantizers
 
-        residual = embeddings
+        residual = embeddings.clone()
+        final_quantized = None
         all_indices = []
         for layer in self.layers[:num_quantizers]:
             indices = layer.encode(residual)
             quantized = layer.decode(indices)
+            final_quantized = quantized if final_quantized is None else final_quantized + quantized
             residual = residual - quantized
             all_indices.append(indices)
         out_indices = torch.stack(all_indices)
         if output_quantized:
-            final_quantized = embeddings - residual
             # print('final_quantized', final_quantized.shape)
             # print('original_embeddings', embeddings.shape)
             final_quantized = self.output_proj(final_quantized)
