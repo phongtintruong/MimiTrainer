@@ -10,6 +10,7 @@ from mimitrainer.trainer import MimiTrainer
 from pathlib import Path
 from transformers import AutoFeatureExtractor, HubertModel
 from huggingface_hub import login
+import os, torch
 
 
 if __name__ == '__main__':
