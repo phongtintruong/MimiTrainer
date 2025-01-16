@@ -42,7 +42,7 @@ torch.cuda.empty_cache()
 print('start')
 
 # Define the path to the checkpoint
-checkpoint_path = '/home/ws2080ti/Documents/project/MimiTrainer/Log/spt_base/MimiTrainer_00000200'
+checkpoint_path = '/home/ws2080ti/Documents/project/MimiTrainer/Log/spt_base/old4/MimiTrainer_00000450'
 
 generator_config = MeomeoConfig.from_pretrained('/home/ws2080ti/Documents/project/MimiTrainer/config/meomeo_cfg.json')
 # Instantiate the generator model
@@ -55,7 +55,7 @@ meomeo = load_generator_only(path=checkpoint_path, generator=meomeo)
 meomeo.eval()
 
 meomeo.push_to_hub(
-    repo_id='phongtintruong/meomeo-mhubert-vietbud-192-200',  # Name of the repository
+    repo_id='phongtintruong/meomeo-mhubert-vietbud-116-450',  # Name of the repository
     use_temp_dir=True,                # Temporarily saves files before pushing
     commit_message="Initial commit",  # Optional commit message
 )

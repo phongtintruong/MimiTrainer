@@ -83,8 +83,11 @@ class MimiTrainer(nn.Module):
         self.log_steps = cfg.get('log_steps')
         # self.stdout_steps = cfg.get('stdout_steps')
         self.save_model_steps = cfg.get('save_model_steps')
+        self.save_pretrained_discriminators_steps = cfg.get('save_pretrained_discriminators_steps')
         results_folder = cfg.get('results_folder')
         self.results_folder = Path(results_folder)
+        pretrained_discriminators_folder = cfg.get('pretrained_discriminators_folder')
+        self.pretrained_discriminators_folder = Path(pretrained_discriminators_folder)
         self.num_ckpt_keep = cfg.get("num_ckpt_keep")
         self.epochs = cfg.get("epochs")
         self.gradient_accumulation_steps = cfg.get("gradient_accumulation_steps")
@@ -275,12 +278,12 @@ class MimiTrainer(nn.Module):
 
         # scheduler
         if self.stream_train_data:
-            num_gen_train_steps = ((self.epochs * self.train_est_len) // (self.gradient_accumulation_steps * self.batch_size)) // (2 + self.generator_steps_skip)
-            num_disc_train_steps = num_gen_train_steps * (1 + self.generator_steps_skip)
+            num_gen_train_steps = (((self.epochs - self.discriminators_warmup_epochs) * self.train_est_len) // (self.gradient_accumulation_steps * self.batch_size)) // (2 + self.generator_steps_skip)
+            num_disc_train_steps = num_gen_train_steps * (1 + self.generator_steps_skip) + (self.discriminators_warmup_epochs * self.train_est_len) // (self.gradient_accumulation_steps * self.batch_size)
         else:
             # num_train_steps = self.epochs * self.ds.__len__() // (self.gradient_accumulation_steps * self.batch_size)
-            num_gen_train_steps = ((self.epochs * len(self.ds)) // (self.gradient_accumulation_steps * self.batch_size)) // (2 + self.generator_steps_skip)
-            num_disc_train_steps = num_gen_train_steps * (1 + self.generator_steps_skip)
+            num_gen_train_steps = (((self.epochs - self.discriminators_warmup_epochs) * len(self.ds)) // (self.gradient_accumulation_steps * self.batch_size)) // (2 + self.generator_steps_skip)
+            num_disc_train_steps = num_gen_train_steps * (1 + self.generator_steps_skip) + (self.discriminators_warmup_epochs * len(self.ds)) // (self.gradient_accumulation_steps * self.batch_size)
         # self.scheduler_g = CosineAnnealingLR(self.optim_g, T_max=num_train_steps)
         # self.scheduler_d = CosineAnnealingLR(self.optim_d, T_max=num_train_steps)
         self.scheduler_g = get_cosine_schedule_with_warmup(
@@ -452,6 +455,7 @@ class MimiTrainer(nn.Module):
         avg_adversarial_loss = 0.
 
         state = 1
+        discriminators_steps = 1
         generator_state = self.generator_steps_skip + 2
 
         for epoch in range(self.epochs):
@@ -479,7 +483,6 @@ class MimiTrainer(nn.Module):
                     x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
                     if torch.isnan(feature).any():
                         print("NaN detected in feature (student embedding)")
-                        # Add more specific debugging to pinpoint where in the generator it occurs
                     if torch.isnan(semantic_feature).any():
                         print("NaN detected in target_feature (teacher embedding)")
 
@@ -634,10 +637,18 @@ class MimiTrainer(nn.Module):
                                     with torch.no_grad():
                                         ema_disc.update_parameters(self.discriminators[name])
                             
-                            print('epoch', epoch, 'step', steps, 'state', state)
+                            print('epoch', epoch, 'step', steps, 'state', state, 'discriminators_steps', discriminators_steps)
                             print(f"Disc Loss: {self.accelerator.gather(avg_disc_loss / self.gradient_accumulation_steps)}")
                             avg_disc_loss = 0.
-                            state += 1
+                            if epoch >= self.discriminators_warmup_epochs:
+                                state += 1
+                            elif not (discriminators_steps % self.save_pretrained_discriminators_steps):
+                                # save model
+                                model_path = str(self.pretrained_discriminators_folder / f'Pretrained_Discriminators_{discriminators_steps:08d}')
+                                self.save(model_path, 99999)
+                                self.print(f'{discriminators_steps}: saving model to {str(self.pretrained_discriminators_folder)}')
+                                # self.generator.train()
+                            discriminators_steps += 1
 
                 self.steps += 1
                 steps = int(self.steps.item())
