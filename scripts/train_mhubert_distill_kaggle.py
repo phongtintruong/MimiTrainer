@@ -2,7 +2,7 @@
 from mimitrainer.discriminators import MultiPeriodDiscriminator, MultiScaleDiscriminator, MultiScaleSTFTDiscriminator
 import json
 import argparse
-from mimitransformers import TrainingMimiProjectorModel, TrainingMimiProjectorConfig
+from mimitransformers import MeomeoModel, MeomeoConfig
 from mimitrainer.discriminators import MultiPeriodDiscriminator, MultiScaleDiscriminator, MultiScaleSTFTDiscriminator
 import json
 from transformers import AutoFeatureExtractor
@@ -15,7 +15,7 @@ from huggingface_hub import login
 if __name__ == '__main__':
     login('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')
 
-    CONFIG_PATH = "config/kaggle_cfg.json"  # Path to your config file
+    CONFIG_PATH = "config/spt_base_cfg_pretrained_discriminators.json"  # Path to your config file
 
     # Load config from file
     config_file = Path(CONFIG_PATH)
@@ -26,18 +26,44 @@ if __name__ == '__main__':
         raise FileNotFoundError(f"Config file not found at {CONFIG_PATH}")
 
     # Instantiate model and feature extractor
-    generator_config = TrainingMimiProjectorConfig.from_pretrained("config/kaggle_cfg.json")
-    generator = TrainingMimiProjectorModel.from_pretrained("kyutai/mimi", config=generator_config)
+    generator_config = MeomeoConfig.from_pretrained("config/meomeo_cfg.json")
+    generator = MeomeoModel.from_pretrained("kyutai/mimi", config=generator_config)
     feature_extractor = AutoFeatureExtractor.from_pretrained("kyutai/mimi")
 
     processor = AutoFeatureExtractor.from_pretrained(config["teacher_feature_extractor"])
     model = HubertModel.from_pretrained(config["teacher_model_path"])
 
+    def load_discriminators(path, discriminators):
+        # Check if the checkpoint file exists
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Checkpoint not found at {path}")
+
+        # Load the checkpoint
+        pkg = torch.load(path, map_location='cpu')
+        print(f"Checkpoint keys: {pkg.keys()}")  # Print checkpoint keys for debugging
+
+        # Ensure the checkpoint contains discriminator state_dicts
+        if 'discriminators' not in pkg:
+            raise KeyError("The checkpoint does not contain the discriminators state_dict.")
+
+        # Load each discriminator's state_dict
+        for name, discriminator in discriminators.items():
+            if name not in pkg['discriminators']:
+                raise KeyError(f"The checkpoint does not contain the state_dict for discriminator '{name}'.")
+            discriminator.load_state_dict(pkg['discriminators'][name])  # Load state_dict for each discriminator
+            print(f"Discriminator '{name}' loaded successfully from checkpoint.")
+
+        return discriminators
+
     discriminators = {
-        'mpd': MultiPeriodDiscriminator(),
-        'msd': MultiScaleDiscriminator(),
+        # 'mpd': MultiPeriodDiscriminator(),
+        # 'msd': MultiScaleDiscriminator(),
         'mstftd': MultiScaleSTFTDiscriminator(32)
     }
+
+    pretrained_discriminators_path = '/kaggle/input/mimi_discriminator/other/2450/1/Pretrained_Discriminators_00002450'
+
+    discriminators = load_discriminators(path=pretrained_discriminators_path, discriminators=discriminators)
 
     # Create trainer instance
     trainer = MimiTrainer(
@@ -47,7 +73,7 @@ if __name__ == '__main__':
         teacher_feature_extractor=processor,
         discriminators=discriminators,
         cfg=config,
-        accelerate_kwargs={'mixed_precision': 'fp16'},
+        accelerate_kwargs={},
     )
 
     # Start training (or continue training)
