@@ -65,7 +65,7 @@ if __name__ == '__main__':
         'mstftd': MultiScaleSTFTDiscriminator(32)
     }
 
-    pretrained_discriminators_path = '/home/ws2080ti/Documents/project/MimiTrainer/Log/spt_base/discriminators/Pretrained_Discriminators_00002450'
+    pretrained_discriminators_path = '/kaggle/input/mimi_discriminator/other/2450/1/Pretrained_Discriminators_00002450'
 
     discriminators = load_discriminators(path=pretrained_discriminators_path, discriminators=discriminators)
 
