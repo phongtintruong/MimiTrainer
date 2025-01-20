@@ -478,6 +478,11 @@ class MimiTrainer(nn.Module):
                 nq = random.randint(1, self.max_nq+1)
 
                 if epoch >= self.discriminators_warmup_epochs and not (state % generator_state):
+                    for disc in self.discriminators.values():
+                        for param in disc.parameters():
+                            param.requires_grad = False
+                    for param in self.generator.parameters():
+                        param.requires_grad = True
                     self.generator.train()
                     model_outs = self.generator(input_values=x, num_quantizers=nq, do_quantize=do_quantize)
                     x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
@@ -610,7 +615,11 @@ class MimiTrainer(nn.Module):
                     
                 else:
                     for disc in self.discriminators.values():
+                        for param in disc.parameters():
+                            param.requires_grad = True
                         disc.train()
+                    for param in self.generator.parameters():
+                        param.requires_grad = False
 
                     with torch.no_grad():
                         model_outs = self.generator(input_values=x, num_quantizers=nq, do_quantize=do_quantize)
