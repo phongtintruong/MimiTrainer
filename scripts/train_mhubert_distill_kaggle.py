@@ -16,7 +16,7 @@ import os, torch
 if __name__ == '__main__':
     login('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')
 
-    CONFIG_PATH = "config/spt_base_cfg_pretrained_discriminators.json"  # Path to your config file
+    CONFIG_PATH = "config/kaggle_cfg.json"  # Path to your config file
 
     # Load config from file
     config_file = Path(CONFIG_PATH)
@@ -62,9 +62,9 @@ if __name__ == '__main__':
         'mstftd': MultiScaleSTFTDiscriminator(32)
     }
 
-    pretrained_discriminators_path = '/kaggle/input/mimi_discriminator/other/2450/1/Pretrained_Discriminators_00002450'
+    # pretrained_discriminators_path = '/kaggle/input/mimi_discriminator/other/2450/1/Pretrained_Discriminators_00002450'
 
-    discriminators = load_discriminators(path=pretrained_discriminators_path, discriminators=discriminators)
+    # discriminators = load_discriminators(path=pretrained_discriminators_path, discriminators=discriminators)
 
     # Create trainer instance
     trainer = MimiTrainer(
