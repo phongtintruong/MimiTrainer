@@ -117,6 +117,9 @@ class MimiTrainer(nn.Module):
         if not self.results_folder.exists():
             self.results_folder.mkdir(parents=True, exist_ok=True)
 
+        if not self.pretrained_discriminators_folder.exists():
+            self.pretrained_discriminators_folder.mkdir(parents=True, exist_ok=True)
+
         with open(f'{str(self.results_folder)}/config.json', 'w+') as f:
             json.dump(cfg, f, ensure_ascii=False, indent=4)
 
