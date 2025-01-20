@@ -34,10 +34,10 @@
     "sampling_rate": 24000,
 
     "batch_size": 4,
-    "epochs":3000,
+    "epochs":200,
     "gradient_accumulation_steps": 64,
     "generator_steps_skip": 2,
-    "discriminators_warmup_epochs": 1000,
+    "discriminators_warmup_epochs": 70,
 
     "generator_learning_rate": 4e-5,
     "initial_generator_learning_rate":4e-5,
