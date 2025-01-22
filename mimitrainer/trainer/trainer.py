@@ -457,6 +457,8 @@ class MimiTrainer(nn.Module):
         avg_disc_loss = 0.
         avg_feature_loss = 0.
         avg_adversarial_loss = 0.
+        avg_mel_loss = 0.
+        avg_recon_loss = 0.
 
         discriminators_steps = 0
         generator_steps = 0
@@ -481,6 +483,8 @@ class MimiTrainer(nn.Module):
 
                 do_quantize = random.choices([True, False], weights=[self.quantization_rate, 1 - self.quantization_rate], k=1)[0]
                 nq = random.randint(1, self.max_nq+1)
+
+                # if epoch >= self.discriminators_warmup_epochs:
 
                 for param in self.generator.parameters():
                         param.requires_grad = True
@@ -527,11 +531,11 @@ class MimiTrainer(nn.Module):
                             # self.generator.train()
 
                     discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
-                    # loss_recon = recon_loss(x, x_hat)
-                    # loss_mel = sum(
-                    #     mel_lambda * mel_loss(x, x_hat, **mel_kwargs)
-                    #     for mel_lambda, mel_kwargs in zip(self.mel_loss_lambdas, self.mel_loss_kwargs_list)
-                    # )
+                    loss_recon = recon_loss(x, x_hat)
+                    loss_mel = sum(
+                        mel_lambda * mel_loss(x, x_hat, **mel_kwargs)
+                        for mel_lambda, mel_kwargs in zip(self.mel_loss_lambdas, self.mel_loss_kwargs_list)
+                    )
                     loss_feature = sum(feature_loss(*output[2:]) for output in discriminator_outputs)
                     loss_adversarial = sum(adversarial_loss(output[1]) for output in discriminator_outputs)
                     loss_distill = self.distill_loss(feature, semantic_feature)
@@ -539,12 +543,16 @@ class MimiTrainer(nn.Module):
                     loss_generator_all = (
                         loss_feature * self.feature_loss_lambda +
                         loss_adversarial * self.adversarial_loss_lambda +
-                        loss_distill * self.distill_loss_lambda
+                        loss_distill * self.distill_loss_lambda +
+                        loss_recon * self.recon_loss_lambda + 
+                        loss_mel
                     )
                     avg_generator_loss += loss_generator_all.item()
                     avg_distill_loss += loss_distill.item()
                     avg_feature_loss += loss_feature.item()
                     avg_adversarial_loss += loss_adversarial.item()
+                    avg_mel_loss += loss_mel.item()
+                    avg_recon_loss += loss_recon.item()
                     self.accelerator.backward(loss_generator_all)
                     self.optim_g.step()
                     self.scheduler_g.step()
@@ -562,6 +570,8 @@ class MimiTrainer(nn.Module):
                                 f"Distill Loss: {self.accelerator.gather(avg_distill_loss / (self.gradient_accumulation_steps * self.gen_log_steps))}; "
                                 f"Feature Loss: {self.accelerator.gather(avg_feature_loss / (self.gradient_accumulation_steps * self.gen_log_steps))}; "
                                 f"Adversarial Loss: {self.accelerator.gather(avg_adversarial_loss / (self.gradient_accumulation_steps * self.gen_log_steps))}; "
+                                f"Reconstruction Loss: {self.accelerator.gather(avg_recon_loss / (self.gradient_accumulation_steps * self.gen_log_steps))}; "
+                                f"Mel Loss: {self.accelerator.gather(avg_mel_loss / (self.gradient_accumulation_steps * self.gen_log_steps))}; "
                                 f"learning rate: {lr}; "
                                 f"Time cost per step: {step_time_log['time_cost'] / self.gen_log_steps:0.3f}s"
                             )
@@ -577,6 +587,8 @@ class MimiTrainer(nn.Module):
                             avg_generator_loss = 0.
                             avg_feature_loss = 0.
                             avg_adversarial_loss = 0.
+                            avg_mel_loss = 0.
+                            avg_recon_loss = 0.
                         if not (generator_steps % self.save_model_steps):
                             self.print("Validation start ...")
                             total_mel_error = 0.0
