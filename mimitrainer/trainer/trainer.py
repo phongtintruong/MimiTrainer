@@ -503,8 +503,10 @@ class MimiTrainer(nn.Module):
                     print("NaN detected in target_feature (teacher embedding)")
 
                 with self.accelerator.accumulate(self.discriminators, self.generator):
-                    discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
-                    loss_disc_all = sum(discriminator_loss(*output[:2]) for output in discriminator_outputs)
+                    detach_discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
+                    with torch.no_grad():
+                        discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
+                    loss_disc_all = sum(discriminator_loss(*output[:2]) for output in detach_discriminator_outputs)
                     avg_disc_loss += loss_disc_all.item()
                     self.accelerator.backward(loss_disc_all)
                     self.optim_d.step()
@@ -530,7 +532,6 @@ class MimiTrainer(nn.Module):
                             self.print(f'{discriminators_steps}: saving model to {str(self.pretrained_discriminators_folder)}')
                             # self.generator.train()
 
-                    discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
                     loss_recon = recon_loss(x, x_hat)
                     loss_mel = sum(
                         mel_lambda * mel_loss(x, x_hat, **mel_kwargs)
@@ -594,6 +595,7 @@ class MimiTrainer(nn.Module):
                             total_mel_error = 0.0
                             total_distill_loss = 0.0
                             total_recon_loss = 0.0
+                            total_disc_loss = 0.0
                             num = 0
                             self.generator.eval()
                             with torch.no_grad():
@@ -617,6 +619,9 @@ class MimiTrainer(nn.Module):
                                     x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
                                     # print('generator output')
 
+                                    discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
+                                    loss_disc_all = sum(discriminator_loss(*output[:2]) for output in discriminator_outputs)
+
                                     mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
                                     distill_loss = self.distill_loss(feature, semantic_feature).item()
                                     loss_recon = recon_loss(x, x_hat).item()
@@ -624,6 +629,7 @@ class MimiTrainer(nn.Module):
                                     total_mel_error += mel_error
                                     total_distill_loss += distill_loss
                                     total_recon_loss += loss_recon
+                                    total_disc_loss += loss_disc_all
                                     num += x.size(0)
                                     if i < self.showpiece_num:
                                         if not self.plot_gt_once:
@@ -644,7 +650,7 @@ class MimiTrainer(nn.Module):
                                 if not self.plot_gt_once:
                                     self.plot_gt_once = True
                                 self.print(
-                                    f'{generator_steps}: recon loss: {total_recon_loss / num}\tdev mel error: {total_mel_error / num}\tdev distill loss: {total_distill_loss / num}')
+                                    f'{generator_steps}: dev recon loss: {total_recon_loss / num}\tdev disc loss: {total_disc_loss / num}\tdev mel error: {total_mel_error / num}\tdev distill loss: {total_distill_loss / num}')
                                 self.log(
                                     {'dev/mel error': total_mel_error / num, 'dev/distillation loss': total_distill_loss / num},
                                     step=generator_steps)
