@@ -39,10 +39,10 @@
     "sampling_rate": 24000,
 
     "batch_size": 2,
-    "epochs":2,
+    "epochs":3,
     "gradient_accumulation_steps": 128,
     "generator_steps_skip": 2,
-    "discriminators_warmup_epochs": 0,
+    "discriminators_warmup_epochs": 1,
 
     "generator_learning_rate": 4e-5,
     "initial_generator_learning_rate":4e-5,
@@ -58,12 +58,12 @@
     "wd_ndim": 2,
 
     "seed": 1902,
-    "max_length_s": 5,
+    "max_length_s": 3,
     "num_workers": 8,
     "disc_log_steps": 1,
     "gen_log_steps": 1,
     "save_model_steps": 5,
-    "save_pretrained_discriminators_steps": 100,
+    "save_pretrained_discriminators_steps": 10,
     "num_ckpt_keep": 10,
     "showpiece_num": 8,
 

@@ -704,7 +704,7 @@ class MimiTrainer(nn.Module):
                                     f"Disc Loss: {self.accelerator.gather(avg_disc_loss / (self.gradient_accumulation_steps * self.disc_log_steps))}")
                                 avg_disc_loss = 0.
 
-                            if not (discriminators_steps % self.save_pretrained_discriminators_steps) and epoch < self.discrimiantors_warmup_epochs:
+                            if not (discriminators_steps % self.save_pretrained_discriminators_steps) and epoch < self.discriminators_warmup_epochs:
                                 # save model
                                 model_path = str(
                                     self.pretrained_discriminators_folder / f'Pretrained_Discriminators_{discriminators_steps:08d}')
