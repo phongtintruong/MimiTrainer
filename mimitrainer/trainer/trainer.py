@@ -282,12 +282,12 @@ class MimiTrainer(nn.Module):
 
         # scheduler
         if self.stream_train_data:
-            num_gen_train_steps = ((self.epochs - self.discriminators_warmup_epochs) * self.train_est_len) // (self.gradient_accumulation_steps * self.batch_size)
-            num_disc_train_steps = num_gen_train_steps + (self.discriminators_warmup_epochs * self.train_est_len) // (self.gradient_accumulation_steps * self.batch_size)
+            num_gen_train_steps = (self.epochs - self.discriminators_warmup_epochs) * ((self.train_est_len // self.batch_size) // self.gradient_accumulation_steps)
+            num_disc_train_steps = num_gen_train_steps + (self.discriminators_warmup_epochs * ((self.train_est_len // self.batch_size) // self.gradient_accumulation_steps))
         else:
             # num_train_steps = self.epochs * self.ds.__len__() // (self.gradient_accumulation_steps * self.batch_size)
-            num_gen_train_steps = ((self.epochs - self.discriminators_warmup_epochs) * len(self.ds)) // (self.gradient_accumulation_steps * self.batch_size)
-            num_disc_train_steps = num_gen_train_steps + (self.discriminators_warmup_epochs * len(self.ds)) // (self.gradient_accumulation_steps * self.batch_size)
+            num_gen_train_steps = (self.epochs - self.discriminators_warmup_epochs) * ((len(self.ds) // self.batch_size) // self.gradient_accumulation_steps)
+            num_disc_train_steps = num_gen_train_steps + (self.discriminators_warmup_epochs * ((len(self.ds) // self.batch_size) // self.gradient_accumulation_steps))
         # self.scheduler_g = CosineAnnealingLR(self.optim_g, T_max=num_train_steps)
         # self.scheduler_d = CosineAnnealingLR(self.optim_d, T_max=num_train_steps)
         self.scheduler_g = get_cosine_schedule_with_warmup(
