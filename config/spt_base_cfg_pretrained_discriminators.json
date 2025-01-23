@@ -8,16 +8,17 @@
     "teacher_feature_extractor": "utter-project/mHuBERT-147",
     "teacher_sampling_rate": 16000,
 
-    "num_mels": 80,
+    "num_mels": 64,
     "n_fft": 1024,
-    "hop_size": 240,
+    "hop_size": 256,
     "win_size": 1024,
-    "fmin": 0,
-    "fmax": 8000,
+    "fmin": 64,
+    "fmax": null,
     "fmax_for_loss": null,
     "mel_loss_lambdas": [45, 1, 1, 1],
-    "recon_loss_lambda": 800,
-    "commitment_loss_lambda": 10, 
+    "recon_loss_lambda": 0.1,
+
+    "msstft_disc_filters": 32,
 
     "distill_loss_lambda": 1,
     "feature_loss_lambda": 4,
@@ -26,8 +27,8 @@
 
     "train_audio_path": "parquet",
     "val_audio_path": "parquet",
-    "train_files": "/home/ws2080ti/Documents/project/MimiTrainer/audio/vietbud500_train_files.txt",
-    "val_files": "/home/ws2080ti/Documents/project/MimiTrainer/audio/vietbud500_validation_files.txt",
+    "train_files": "/home/anhnct1/Documents/MimiTrainer/audio/vietbud500_train_files.txt",
+    "val_files": "/home/anhnct1/Documents/MimiTrainer/audio/vietbud500_validation_files.txt",
     "stream_train_data": true,
     "stream_val_data": false,
     "train_est_len": 634158,
@@ -45,7 +46,7 @@
 
     "generator_learning_rate": 4e-5,
     "initial_generator_learning_rate":4e-5,
-    "discriminators_learning_rate": 1e-4,
+    "discriminators_learning_rate": 3e-4,
     "num_warmup_steps":0.1,
     "betas":[0.5, 0.9],
     "ema_decay": 0.99,
@@ -57,11 +58,15 @@
     "wd_ndim": 2,
 
     "seed": 1902,
-    "max_length_s": 6,
+    "max_length_s": 5,
     "num_workers": 8,
-    "log_steps": 1,
+    "disc_log_steps": 1,
+    "gen_log_steps": 1,
     "save_model_steps": 5,
-    "save_pretrained_discriminators_steps": 50,
+    "save_pretrained_discriminators_steps": 100,
     "num_ckpt_keep": 10,
-    "showpiece_num": 8
+    "showpiece_num": 8,
+
+    "checkpoint_path": null,
+    "pretrained_disc_path": null
 }

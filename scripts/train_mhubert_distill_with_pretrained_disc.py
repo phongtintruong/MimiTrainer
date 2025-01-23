@@ -59,15 +59,25 @@ if __name__ == '__main__':
 
         return discriminators
 
+
     discriminators = {
-        # 'mpd': MultiPeriodDiscriminator(),
-        # 'msd': MultiScaleDiscriminator(),
-        'mstftd': MultiScaleSTFTDiscriminator(32)
+        'mpd': MultiPeriodDiscriminator(),
+        'msd': MultiScaleDiscriminator(),
+        'mstftd': MultiScaleSTFTDiscriminator(config['msstft_disc_filters'])
     }
+    pretrained_disc_path = config['pretrained_disc_path']
 
-    pretrained_discriminators_path = '/kaggle/input/mimi_discriminator/other/2450/1/Pretrained_Discriminators_00002450'
+    if pretrained_disc_path is not None:
+        discriminators = load_discriminators(path=pretrained_disc_path, discriminators=discriminators)
 
-    discriminators = load_discriminators(path=pretrained_discriminators_path, discriminators=discriminators)
+    # additive_discriminators = {
+    #     'mpd': MultiPeriodDiscriminator(),
+    #     'msd': MultiScaleDiscriminator()
+    # }
+
+    # discriminators = discriminators.copy()  # Create a new dictionary if needed
+    # discriminators.update(additive_discriminators)
+
 
     # Create trainer instance
     trainer = MimiTrainer(
@@ -81,9 +91,9 @@ if __name__ == '__main__':
     )
 
     # Start training (or continue training)
-    continue_training = False  # Set to True if you want to continue
+    checkpoint_path = config['checkpoint_path']
 
-    if continue_training:
-        trainer.continue_train()
+    if checkpoint_path is not None:
+        trainer.continue_train(checkpoint_path)
     else:
         trainer.train()
