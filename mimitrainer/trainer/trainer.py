@@ -463,10 +463,13 @@ class MimiTrainer(nn.Module):
         discriminators_steps = 0
         generator_steps = 0
 
+        batch_disc_steps = 0
+        batch_gen_steps = 0
+
         if self.stream_train_data:
-            stop_pretrain_disc_point = (self.train_est_len // self.batch_size) // self.gradient_accumulation_steps
+            drop_last_point = (self.train_est_len // self.batch_size) // self.gradient_accumulation_steps
         else:
-            stop_pretrain_disc_point = (len(self.ds) // self.batch_size) // self.gradient_accumulation_steps
+            drop_last_point = (len(self.ds) // self.batch_size) // self.gradient_accumulation_steps
 
         for epoch in range(self.epochs):
             if self.is_main:
@@ -528,12 +531,6 @@ class MimiTrainer(nn.Module):
                                 print(f"Disc Loss: {self.accelerator.gather(avg_disc_loss / (self.gradient_accumulation_steps*self.disc_log_steps))}")
                                 avg_disc_loss = 0.
 
-                            if not (discriminators_steps % self.save_pretrained_discriminators_steps) and epoch < self.discrimiantors_warmup_epochs:
-                                # save model
-                                model_path = str(self.pretrained_discriminators_folder / f'Pretrained_Discriminators_{discriminators_steps:08d}')
-                                self.save(model_path, 99999)
-                                self.print(f'{discriminators_steps}: saving model to {str(self.pretrained_discriminators_folder)}')
-                                # self.generator.train()
 
                         loss_recon = recon_loss(x, x_hat)
                         loss_mel = sum(
@@ -562,6 +559,7 @@ class MimiTrainer(nn.Module):
                         self.scheduler_g.step()
                         self.optim_g.zero_grad()
                         if self.accelerator.sync_gradients and self.is_main:
+                            batch_gen_steps += 1
                             generator_steps += 1
                             if self.ema_generator:
                                 with torch.no_grad():
@@ -664,7 +662,12 @@ class MimiTrainer(nn.Module):
                                     self.print(f'{generator_steps}: saving model to {str(self.results_folder)}')
                                     # self.generator.train()
                                     print('back to train')
+
+                            if batch_gen_steps >= drop_last_point:
+                                batch_gen_steps = 0
+                                break
                 else:
+                    # print(steps)
                     for disc in self.discriminators.values():
                         for param in disc.parameters():
                             param.requires_grad = True
@@ -692,6 +695,7 @@ class MimiTrainer(nn.Module):
                         self.scheduler_d.step()
                         self.optim_d.zero_grad()
                         if self.accelerator.sync_gradients and self.is_main:
+                            batch_disc_steps += 1
                             discriminators_steps += 1
                             if self.ema_discriminators:
                                 for name, ema_disc in self.ema_ds.items():
@@ -711,8 +715,8 @@ class MimiTrainer(nn.Module):
                                 self.save(model_path, 99999)
                                 self.print(
                                     f'{discriminators_steps}: saving model to {str(self.pretrained_discriminators_folder)}')
-                            if discriminators_steps >= stop_pretrain_disc_point:
-                                avg_disc_loss = 0.
+                            if batch_disc_steps >= drop_last_point:
+                                batch_disc_steps = 0
                                 break
 
                 self.steps += 1
