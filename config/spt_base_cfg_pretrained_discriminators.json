@@ -2,6 +2,7 @@
     "find_unused_parameters": false,
 
     "max_nq": 8,
+    "min_nq": 1,
     "quantization_rate": 0.5,
 
     "teacher_model_path": "utter-project/mHuBERT-147",
@@ -15,12 +16,12 @@
     "fmin": 64,
     "fmax": null,
     "fmax_for_loss": null,
-    "mel_loss_lambdas": [45, 1, 1, 1],
-    "recon_loss_lambda": 0.1,
+    "mel_loss_lambdas": [15, 1, 1, 1],
+    "recon_loss_lambda": 16,
 
     "msstft_disc_filters": 32,
 
-    "distill_loss_lambda": 1,
+    "distill_loss_lambda": 0.1,
     "feature_loss_lambda": 4,
     "adversarial_loss_lambda": 4,
     "distill_type": "d_axis",
@@ -39,34 +40,34 @@
     "sampling_rate": 24000,
 
     "batch_size": 2,
-    "epochs":3,
+    "epochs":2,
     "gradient_accumulation_steps": 128,
     "generator_steps_skip": 2,
-    "discriminators_warmup_epochs": 1,
+    "discriminators_warmup_epochs": 0,
 
     "generator_learning_rate": 4e-5,
     "initial_generator_learning_rate":4e-5,
-    "discriminators_learning_rate": 3e-4,
-    "num_warmup_steps":0.1,
+    "discriminators_learning_rate": 1e-4,
+    "num_warmup_steps":0.05,
     "betas":[0.5, 0.9],
     "ema_decay": 0.99,
     "ema_freq": 1,
     "ema_generator": true,
     "ema_discriminators": false,
-    "wd": 5e-2,
+    "wd": 1e-2,
     "wd_module": ["encoder_transformer", "decoder_transformer"],
     "wd_ndim": 2,
 
     "seed": 1902,
-    "max_length_s": 3,
+    "max_length_s": 2,
     "num_workers": 8,
     "disc_log_steps": 1,
     "gen_log_steps": 1,
-    "save_model_steps": 5,
-    "save_pretrained_discriminators_steps": 10,
+    "save_model_steps": 2,
+    "save_pretrained_discriminators_steps": 200,
     "num_ckpt_keep": 10,
     "showpiece_num": 8,
 
     "checkpoint_path": null,
-    "pretrained_disc_path": null
+    "pretrained_disc_path": "/home/anhnct1/Documents/MimiTrainer/Log/spt_base/discriminators_old/Pretrained_Discriminators_00000090"
 }

@@ -112,6 +112,7 @@ class MimiTrainer(nn.Module):
         self.ema_discriminators = cfg.get("ema_discriminators", False)
 
         self.max_nq = cfg.get('max_nq', 8)
+        self.min_nq = cfg.get('min_nq', 2)
         self.quantization_rate = cfg.get('quantization_rate', 0.5)
         project_name = 'MimiTrainer'
 
@@ -489,7 +490,7 @@ class MimiTrainer(nn.Module):
                 semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8, stride=4).transpose(1, 2)
 
                 do_quantize = random.choices([True, False], weights=[self.quantization_rate, 1 - self.quantization_rate], k=1)[0]
-                nq = random.randint(1, self.max_nq+1)
+                nq = random.randint(self.min_nq, self.max_nq)
 
                 if epoch >= self.discriminators_warmup_epochs:
                     for param in self.generator.parameters():
@@ -510,8 +511,7 @@ class MimiTrainer(nn.Module):
 
                     with self.accelerator.accumulate(self.discriminators, self.generator):
                         detach_discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
-                        with torch.no_grad():
-                            discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
+                        discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
                         loss_disc_all = sum(discriminator_loss(*output[:2]) for output in detach_discriminator_outputs)
                         avg_disc_loss += loss_disc_all.item()
                         self.accelerator.backward(loss_disc_all)
