@@ -93,6 +93,8 @@ if __name__ == '__main__':
     # Start training (or continue training)
     checkpoint_path = config['checkpoint_path']
 
+    torch.autograd.set_detect_anomaly(True)
+
     if checkpoint_path is not None:
         trainer.continue_train(checkpoint_path)
     else:

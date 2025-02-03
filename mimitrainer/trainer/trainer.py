@@ -504,13 +504,14 @@ class MimiTrainer(nn.Module):
 
                     model_outs = self.generator(input_values=x, num_quantizers=nq, do_quantize=do_quantize)
                     x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
+                    x_hat_detached = x_hat.clone().detach()
                     if torch.isnan(feature).any():
                         print("NaN detected in feature (student embedding)")
                     if torch.isnan(semantic_feature).any():
                         print("NaN detected in target_feature (teacher embedding)")
 
                     with self.accelerator.accumulate(self.discriminators, self.generator):
-                        detach_discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
+                        detach_discriminator_outputs = [disc(x, x_hat_detached) for disc in self.discriminators.values()]
                         discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
                         loss_disc_all = sum(discriminator_loss(*output[:2]) for output in detach_discriminator_outputs)
                         avg_disc_loss += loss_disc_all.item()
