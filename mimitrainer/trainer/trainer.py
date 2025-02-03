@@ -616,7 +616,7 @@ class MimiTrainer(nn.Module):
                                         )
                                         semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8, stride=4).transpose(1, 2)
 
-                                        model_outs = self.generator(input_values=x, num_quantizers=self.max_nq, do_quantize=True)
+                                        model_outs = self.generator(input_values=x, num_quantizers=8, do_quantize=True)
                                         x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
                                         # print('generator output')
 
@@ -664,6 +664,12 @@ class MimiTrainer(nn.Module):
                                     print('back to train')
 
                             if batch_gen_steps >= drop_last_point:
+                                self.steps += 1
+                                steps = int(self.steps.item())
+                                # Learning rate update
+                                lr = self.scheduler_g.get_last_lr()[0]
+
+                                step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
                                 batch_gen_steps = 0
                                 break
                 else:
@@ -715,8 +721,15 @@ class MimiTrainer(nn.Module):
                                 self.save(model_path, 99999)
                                 self.print(
                                     f'{discriminators_steps}: saving model to {str(self.pretrained_discriminators_folder)}')
-                            if batch_disc_steps >= drop_last_point:
-                                batch_disc_steps = 0
+                                
+                            if batch_gen_steps >= drop_last_point:
+                                self.steps += 1
+                                steps = int(self.steps.item())
+                                # Learning rate update
+                                lr = self.scheduler_g.get_last_lr()[0]
+
+                                step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
+                                batch_gen_steps = 0
                                 break
 
                 self.steps += 1
