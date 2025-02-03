@@ -17,10 +17,12 @@ if __name__ == '__main__':
     # ✅ Add argument parser
     parser = argparse.ArgumentParser(description="Train mHuBERT with pre-trained discriminators.")
     parser.add_argument("--config_path", type=str, required=True, help="Path to the config JSON file.")
+    parser.add_argument("--hf_token", type=str, default=os.getenv("HF_TOKEN"), help="Hugging Face API token.")
     args = parser.parse_args()
 
     # ✅ Use the provided config path
     config_file = Path(args.config_path)
+    hf_token = args.hf_token
     if not config_file.is_file():
         raise FileNotFoundError(f"Config file not found at {args.config_path}")
 
@@ -29,7 +31,7 @@ if __name__ == '__main__':
         config = json.load(f)
 
     # Login to Hugging Face Hub
-    hf_token = os.getenv("HF_TOKEN")
+    # hf_token = os.getenv("HF_TOKEN")
     login(hf_token)
 
     # Load generator model & feature extractor
