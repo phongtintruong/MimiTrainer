@@ -59,7 +59,7 @@
     "wd_ndim": 2,
 
     "seed": 1902,
-    "max_length_s": 5,
+    "max_length_s": 4.5,
     "num_workers": 8,
     "disc_log_steps": 10,
     "gen_log_steps": 10,
