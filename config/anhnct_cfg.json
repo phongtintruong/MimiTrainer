@@ -39,9 +39,9 @@
     "pretrained_discriminators_folder": "Log/spt_base/discriminators",
     "sampling_rate": 24000,
 
-    "batch_size": 2,
+    "batch_size": 1,
     "epochs":2,
-    "gradient_accumulation_steps": 128,
+    "gradient_accumulation_steps": 256,
     "generator_steps_skip": 2,
     "discriminators_warmup_epochs": 0,
 
@@ -59,7 +59,7 @@
     "wd_ndim": 2,
 
     "seed": 1902,
-    "max_length_s": 2,
+    "max_length_s": 3.5,
     "num_workers": 8,
     "disc_log_steps": 1,
     "gen_log_steps": 1,
@@ -69,5 +69,5 @@
     "showpiece_num": 8,
 
     "checkpoint_path": null,
-    "pretrained_disc_path": "/home/anhnct1/Documents/MimiTrainer/Log/spt_base/discriminators_old/Pretrained_Discriminators_00000090"
+    "pretrained_disc_path": "/home/anhnct1/Documents/MimiTrainer/Log/spt_base/discriminators/Pretrained_Discriminators_00002400"
 }

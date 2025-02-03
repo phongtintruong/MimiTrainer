@@ -1,85 +1,74 @@
-# from speechtokenizer import SpeechTokenizer, SpeechTokenizerTrainer
-from mimitrainer.discriminators import MultiPeriodDiscriminator, MultiScaleDiscriminator, MultiScaleSTFTDiscriminator
-import json
 import argparse
+import json
+import os
+import torch
+from pathlib import Path
+from dotenv import load_dotenv
+from huggingface_hub import login
+from transformers import AutoFeatureExtractor, HubertModel
 from mimitransformers import MeomeoModel, MeomeoConfig
 from mimitrainer.discriminators import MultiPeriodDiscriminator, MultiScaleDiscriminator, MultiScaleSTFTDiscriminator
-import json
-from transformers import AutoFeatureExtractor
 from mimitrainer.trainer import MimiTrainer
-from pathlib import Path
-from transformers import AutoFeatureExtractor, HubertModel
-from huggingface_hub import login
-from dotenv import load_dotenv
-import os, torch
 
+# Load environment variables
 load_dotenv()
 
 if __name__ == '__main__':
+    # ✅ Add argument parser
+    parser = argparse.ArgumentParser(description="Train mHuBERT with pre-trained discriminators.")
+    parser.add_argument("--config_path", type=str, required=True, help="Path to the config JSON file.")
+    args = parser.parse_args()
+
+    # ✅ Use the provided config path
+    config_file = Path(args.config_path)
+    if not config_file.is_file():
+        raise FileNotFoundError(f"Config file not found at {args.config_path}")
+
+    # Load configuration
+    with open(config_file, "r") as f:
+        config = json.load(f)
+
+    # Login to Hugging Face Hub
     hf_token = os.getenv("HF_TOKEN")
     login(hf_token)
-    # Configuration
-    CONFIG_PATH = "config/spt_base_cfg_pretrained_discriminators.json"  # Path to your config file
 
-    # Load config from file
-    config_file = Path(CONFIG_PATH)
-    if config_file.is_file():
-        with open(config_file, "r") as f:
-            config = json.load(f)
-    else:
-        raise FileNotFoundError(f"Config file not found at {CONFIG_PATH}")
-
-    # Instantiate model and feature extractor
+    # Load generator model & feature extractor
     generator_config = MeomeoConfig.from_pretrained("config/meomeo_cfg.json")
     generator = MeomeoModel.from_pretrained("kyutai/mimi", config=generator_config)
     feature_extractor = AutoFeatureExtractor.from_pretrained("kyutai/mimi")
 
+    # Load teacher model
     processor = AutoFeatureExtractor.from_pretrained(config["teacher_feature_extractor"])
     model = HubertModel.from_pretrained(config["teacher_model_path"])
 
+    # Function to load discriminators from a checkpoint
     def load_discriminators(path, discriminators):
-        # Check if the checkpoint file exists
         if not os.path.exists(path):
             raise FileNotFoundError(f"Checkpoint not found at {path}")
-
-        # Load the checkpoint
-        pkg = torch.load(path, map_location='cpu')
-        print(f"Checkpoint keys: {pkg.keys()}")  # Print checkpoint keys for debugging
-
-        # Ensure the checkpoint contains discriminator state_dicts
-        if 'discriminators' not in pkg:
+        pkg = torch.load(path, map_location="cpu")
+        if "discriminators" not in pkg:
             raise KeyError("The checkpoint does not contain the discriminators state_dict.")
-
-        # Load each discriminator's state_dict
         for name, discriminator in discriminators.items():
-            if name not in pkg['discriminators']:
-                raise KeyError(f"The checkpoint does not contain the state_dict for discriminator '{name}'.")
-            discriminator.load_state_dict(pkg['discriminators'][name])  # Load state_dict for each discriminator
-            print(f"Discriminator '{name}' loaded successfully from checkpoint.")
-
+            if name in pkg["discriminators"]:
+                discriminator.load_state_dict(pkg["discriminators"][name])
+                print(f"✅ Loaded discriminator '{name}' from checkpoint.")
+            else:
+                raise KeyError(f"❌ Missing state_dict for discriminator '{name}' in checkpoint.")
         return discriminators
 
-
+    # Initialize discriminators
     discriminators = {
-        'mpd': MultiPeriodDiscriminator(),
-        'msd': MultiScaleDiscriminator(),
-        'mstftd': MultiScaleSTFTDiscriminator(config['msstft_disc_filters'])
+        "mpd": MultiPeriodDiscriminator(),
+        "msd": MultiScaleDiscriminator(),
+        "mstftd": MultiScaleSTFTDiscriminator(config["msstft_disc_filters"]),
     }
-    pretrained_disc_path = config['pretrained_disc_path']
 
-    if pretrained_disc_path is not None:
-        discriminators = load_discriminators(path=pretrained_disc_path, discriminators=discriminators)
+    # Load pretrained discriminator weights
+    pretrained_disc_path = config.get("pretrained_disc_path")
+    if pretrained_disc_path:
+        discriminators = load_discriminators(pretrained_disc_path, discriminators)
 
-    # additive_discriminators = {
-    #     'mpd': MultiPeriodDiscriminator(),
-    #     'msd': MultiScaleDiscriminator()
-    # }
-
-    # discriminators = discriminators.copy()  # Create a new dictionary if needed
-    # discriminators.update(additive_discriminators)
-
-
-    # Create trainer instance
+    # Create trainer
     trainer = MimiTrainer(
         generator=generator,
         generator_feature_extractor=feature_extractor,
@@ -90,12 +79,9 @@ if __name__ == '__main__':
         accelerate_kwargs={},
     )
 
-    # Start training (or continue training)
-    checkpoint_path = config['checkpoint_path']
-
-    torch.autograd.set_detect_anomaly(True)
-
-    if checkpoint_path is not None:
+    # Start or continue training
+    checkpoint_path = config.get("checkpoint_path")
+    if checkpoint_path:
         trainer.continue_train(checkpoint_path)
     else:
         trainer.train()
