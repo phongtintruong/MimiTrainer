@@ -18,6 +18,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train mHuBERT with pre-trained discriminators.")
     parser.add_argument("--config_path", type=str, required=True, help="Path to the config JSON file.")
     parser.add_argument("--hf_token", type=str, default=os.getenv("HF_TOKEN"), help="Hugging Face API token.")
+    parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to the checkpoint file.")
     args = parser.parse_args()
 
     # ✅ Use the provided config path
@@ -29,6 +30,8 @@ if __name__ == '__main__':
     # Load configuration
     with open(config_file, "r") as f:
         config = json.load(f)
+
+    checkpoint_path = args.checkpoint_path if args.checkpoint_path else config.get("checkpoint_path")
 
     # Login to Hugging Face Hub
     # hf_token = os.getenv("HF_TOKEN")
@@ -82,7 +85,7 @@ if __name__ == '__main__':
     )
 
     # Start or continue training
-    checkpoint_path = config.get("checkpoint_path")
+    # checkpoint_path = config.get("checkpoint_path")
     if checkpoint_path:
         trainer.continue_train(checkpoint_path)
     else:
