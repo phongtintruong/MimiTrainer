@@ -5,8 +5,8 @@ import torch
 from pathlib import Path
 from dotenv import load_dotenv
 from huggingface_hub import login
-from transformers import AutoFeatureExtractor, HubertModel
-from mimitransformers import MeomeoModel, MeomeoConfig
+from transformers import AutoFeatureExtractor
+from mimitransformers import MeomeoModel, MeomeoConfig, SemanticTeacher
 from mimitrainer.discriminators import MultiPeriodDiscriminator, MultiScaleDiscriminator, MultiScaleSTFTDiscriminator
 from mimitrainer.trainer import MimiTrainer
 
@@ -44,7 +44,7 @@ if __name__ == '__main__':
 
     # Load teacher model
     processor = AutoFeatureExtractor.from_pretrained(config["teacher_feature_extractor"])
-    model = HubertModel.from_pretrained(config["teacher_model_path"])
+    model = SemanticTeacher.from_pretrained(config["teacher_model_path"], config["teacher_model_type"])
 
     # Function to load discriminators from a checkpoint
     def load_discriminators(path, discriminators):

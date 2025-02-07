@@ -1,30 +1,32 @@
 {   
     "find_unused_parameters": false,
 
-    "max_nq": 8,
+    "max_nq": 32,
     "min_nq": 1,
-    "quantization_rate": 0.5,
+    "quantization_rate": 0.6,
 
-    "teacher_model_path": "utter-project/mHuBERT-147",
-    "teacher_feature_extractor": "utter-project/mHuBERT-147",
+    "teacher_model_path": "nguyenvulebinh/wav2vec2-base-vi",
+    "teacher_feature_extractor": "nguyenvulebinh/wav2vec2-base-vi",
+    "teacher_model_type": "wav2vec2",
     "teacher_sampling_rate": 16000,
+    "teacher_semantic_token_type": "mean",
 
-    "num_mels": 64,
+    "num_mels": 80,
     "n_fft": 1024,
-    "hop_size": 256,
+    "hop_size": 240,
     "win_size": 1024,
-    "fmin": 64,
-    "fmax": null,
+    "fmin": 0,
+    "fmax": 8000,
     "fmax_for_loss": null,
-    "mel_loss_lambdas": [15, 1, 1, 1],
-    "recon_loss_lambda": 16,
+    "mel_loss_lambdas": null,
+    "recon_loss_lambda": null,
 
     "msstft_disc_filters": 32,
 
-    "distill_loss_lambda": 0.1,
-    "feature_loss_lambda": 4,
-    "adversarial_loss_lambda": 4,
-    "distill_type": "d_axis",
+    "distill_loss_lambda": 1,
+    "feature_loss_lambda": 1,
+    "adversarial_loss_lambda": 1,
+    "distill_type": "d_axis_speechtokenizer",
 
     "train_audio_path": "parquet",
     "val_audio_path": "parquet",
@@ -41,15 +43,15 @@
 
     "batch_size": 1,
     "epochs":2,
-    "gradient_accumulation_steps": 256,
+    "gradient_accumulation_steps": 64,
     "generator_steps_skip": 2,
     "discriminators_warmup_epochs": 0,
 
-    "generator_learning_rate": 4e-5,
-    "initial_generator_learning_rate":4e-5,
+    "generator_learning_rate": 8e-5,
+    "initial_generator_learning_rate":8e-5,
     "discriminators_learning_rate": 1e-4,
-    "num_warmup_steps":0.05,
-    "betas":[0.5, 0.9],
+    "num_warmup_steps":0.02,
+    "betas":[0.9, 0.99],
     "ema_decay": 0.99,
     "ema_freq": 1,
     "ema_generator": true,
@@ -59,15 +61,15 @@
     "wd_ndim": 2,
 
     "seed": 1902,
-    "max_length_s": 3.5,
+    "max_length_s": 3,
     "num_workers": 8,
-    "disc_log_steps": 1,
-    "gen_log_steps": 1,
-    "save_model_steps": 2,
+    "disc_log_steps": 20,
+    "gen_log_steps": 20,
+    "save_model_steps": 100,
     "save_pretrained_discriminators_steps": 200,
     "num_ckpt_keep": 10,
     "showpiece_num": 8,
 
     "checkpoint_path": null,
-    "pretrained_disc_path": "/home/anhnct1/Documents/MimiTrainer/Log/spt_base/discriminators/Pretrained_Discriminators_00002400"
+    "pretrained_disc_path": null
 }

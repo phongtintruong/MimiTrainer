@@ -99,15 +99,15 @@ def adversarial_loss(disc_outputs):
 #     distill_loss = l1_loss + lambda_sim * sim_loss
     # return distill_loss 
 
-# def d_axis_distill_loss(feature, target_feature):
-#     # print('feature:', feature.size())
-#     # print('target_feature:', target_feature.size())
+def d_axis_distill_loss_speechtokenizer(feature, target_feature):
+    # print('feature:', feature.size())
+    # print('target_feature:', target_feature.size())
     
-#     # Compute cosine similarity along the feature dimension (dim=2)
-#     distill_loss = -torch.log(torch.sigmoid(F.cosine_similarity(feature, target_feature, dim=2))).mean()
-#     return distill_loss
+    # Compute cosine similarity along the feature dimension (dim=2)
+    distill_loss = -torch.log(torch.sigmoid(F.cosine_similarity(feature, target_feature, dim=2))).mean()
+    return distill_loss
 
-def d_axis_distill_loss(feature, target_feature):
+def d_axis_distill_loss_mimi(feature, target_feature):
     # Compute cosine similarity
     cosine_sim = F.cosine_similarity(feature, target_feature, dim=2)
 
