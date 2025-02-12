@@ -98,4 +98,4 @@ def get_optimizer_with_ema(
 
         return optimizer, ema_models
     else:
-        return optimizer
+        return optimizer, None

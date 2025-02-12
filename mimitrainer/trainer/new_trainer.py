@@ -7,24 +7,31 @@ from beartype import beartype
 
 import torch
 from torch import nn
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from transformers import get_cosine_schedule_with_warmup
 
 from .dataset import get_dataloader, RawAudioDataset
-from .optimizer import get_optimizer
+from .optimizer import get_optimizer_with_ema
 from torch.utils import tensorboard
 from .loss import *
 import json
 import time
 from tqdm import tqdm
-from accelerate import Accelerator, DistributedDataParallelKwargs, DataLoaderConfiguration
-from transformers import AutoFeatureExtractor, PreTrainedModel, Wav2Vec2CTCTokenizer
-from transformers import EncodecFeatureExtractor, AutoProcessor, Wav2Vec2Processor
-import torchaudio
+from accelerate import Accelerator, DistributedDataParallelKwargs, DataLoaderConfiguration, DistributedType
+from transformers import PreTrainedModel, EncodecFeatureExtractor
+from mimitransformers import SemanticTeacher
 from datasets import load_dataset  # Import Hugging Face datasets
-from typing import Union, Dict, Any
+import random
 
 
 # helpers
+def read_urls_from_file(filename):
+    urls = []
+    with open(filename, 'r') as file:
+        for line in file:
+            # Strip the newline character and append to the list
+            urls.append(line.strip())
+    return urls
+
 
 def exists(val):
     return val is not None
@@ -61,42 +68,61 @@ class MimiTrainer(nn.Module):
     @beartype
     def __init__(
             self,
-            epochs,
-            batch_size,
-            train_audio_path,
-            val_audio_path,
             generator: PreTrainedModel,
             generator_feature_extractor: EncodecFeatureExtractor,
-            teacher: PreTrainedModel,
+            teacher: SemanticTeacher,
             teacher_feature_extractor,
-            generator_sampling_rate,
-            teacher_sampling_rate,
-            max_length_s,
             discriminators: dict,
             cfg,
             accelerate_kwargs: dict = dict(),
     ):
         super().__init__()
-        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=False)
+        self.find_unused_parameters = cfg.get('find_unused_parameters', False)
+        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=self.find_unused_parameters)
         torch.manual_seed(cfg.get('seed'))
         split_batches = cfg.get("split_batches", True)
-        self.log_steps = cfg.get('log_steps')
-        self.stdout_steps = cfg.get('stdout_steps')
+        self.disc_log_steps = cfg.get('disc_log_steps')
+        self.gen_log_steps = cfg.get('gen_log_steps')
+        # self.stdout_steps = cfg.get('stdout_steps')
         self.save_model_steps = cfg.get('save_model_steps')
+        self.save_pretrained_discriminators_steps = cfg.get('save_pretrained_discriminators_steps')
         results_folder = cfg.get('results_folder')
         self.results_folder = Path(results_folder)
+        pretrained_discriminators_folder = cfg.get('pretrained_discriminators_folder')
+        self.pretrained_discriminators_folder = Path(pretrained_discriminators_folder)
         self.num_ckpt_keep = cfg.get("num_ckpt_keep")
-        # self.epochs = cfg.get("epochs")
-        self.epochs = epochs
+        self.epochs = cfg.get("epochs")
+        self.gradient_accumulation_steps = cfg.get("gradient_accumulation_steps")
         self.num_warmup_steps = cfg.get("num_warmup_steps")
-        # self.batch_size = cfg.get("batch_size")
-        self.batch_size = batch_size
-        self.sample_rate = 24000
+        self.discriminators_warmup_epochs = cfg.get("discriminators_warmup_epochs")
+        self.batch_size = cfg.get("batch_size")
         self.showpiece_num = cfg.get('showpiece_num', 8)
+        self.sampling_rate = cfg.get('sampling_rate')
+        self.max_length_s = cfg.get('max_length_s')
+        self.teacher_sampling_rate = cfg.get('teacher_sampling_rate')
+        self.teacher_semantic_token_type = cfg.get('teacher_semantic_token_type')
+        self.train_audio_path = cfg.get('train_audio_path')
+        self.val_audio_path = cfg.get('val_audio_path')
+        self.train_files = cfg.get("train_files", None)
+        self.val_files = cfg.get("val_files", None)
+        self.stream_train_data = cfg.get("stream_train_data", True)
+        self.stream_val_data = cfg.get("stream_val_data", False)
+        self.train_est_len = cfg.get("train_est_len", None)
+        self.val_est_len = cfg.get("val_est_len", None)
+        self.ema_freq = cfg.get("ema_freq", 1)
+        self.ema_generator = cfg.get("ema_generator", True)
+        self.ema_discriminators = cfg.get("ema_discriminators", False)
+
+        self.max_nq = cfg.get('max_nq', 8)
+        self.min_nq = cfg.get('min_nq', 2)
+        self.quantization_rate = cfg.get('quantization_rate', 0.5)
         project_name = 'MimiTrainer'
 
         if not self.results_folder.exists():
             self.results_folder.mkdir(parents=True, exist_ok=True)
+
+        if not self.pretrained_discriminators_folder.exists():
+            self.pretrained_discriminators_folder.mkdir(parents=True, exist_ok=True)
 
         with open(f'{str(self.results_folder)}/config.json', 'w+') as f:
             json.dump(cfg, f, ensure_ascii=False, indent=4)
@@ -104,7 +130,9 @@ class MimiTrainer(nn.Module):
         # tracker = AudioTensorBoardTracker(run_name=project_name, logging_dir=results_folder)
         dataloader_config = DataLoaderConfiguration(split_batches=split_batches)
         self.accelerator = Accelerator(
+            gradient_accumulation_steps=self.gradient_accumulation_steps,
             dataloader_config=dataloader_config,
+            # mixed_precision="fp16",
             kwargs_handlers=[ddp_kwargs],
             # log_with=tracker,
             **accelerate_kwargs
@@ -113,15 +141,10 @@ class MimiTrainer(nn.Module):
         if self.is_main:
             self.writer = tensorboard.SummaryWriter(os.path.join(results_folder, 'logs'))
 
-        self.train_audio_path = train_audio_path
-        self.val_audio_path = val_audio_path
         self.generator = generator
         self.generator_feature_extractor = generator_feature_extractor
         self.teacher = teacher
         self.teacher_feature_extractor = teacher_feature_extractor
-        self.generator_sampling_rate = generator_sampling_rate
-        self.teacher_sampling_rate = teacher_sampling_rate
-        self.max_length_s = max_length_s
         self.discriminators = discriminators
         for param in self.teacher.parameters():
             param.requires_grad = False
@@ -134,88 +157,156 @@ class MimiTrainer(nn.Module):
         # self.commitment_loss_lambda = cfg.get('commitment_loss_lambda')
         self.recon_loss_lambda = cfg.get('recon_loss_lambda')
         self.distill_loss_lambda = cfg.get('distill_loss_lambda')
-        distill_type = cfg.get('distill_type', 'd_axis')
+        self.feature_loss_lambda = cfg.get('feature_loss_lambda')
+        self.adversarial_loss_lambda = cfg.get('adversarial_loss_lambda')
+        distill_type = cfg.get('distill_type', 'd_axis_mimi')
         if distill_type == 't_axis':
             from functools import partial
             lambda_sim = cfg.get('lambda_sim', 1)
             self.distill_loss = partial(t_axis_distill_loss, lambda_sim=lambda_sim)
+        elif distill_type == 'd_axis_speechtokenizer':
+            self.distill_loss = d_axis_distill_loss_speechtokenizer
         else:
-            self.distill_loss = d_axis_distill_loss
+            self.distill_loss = d_axis_distill_loss_mimi
 
-        self.mel_loss_kwargs_list = []
-        mult = 1
-        for i in range(len(self.mel_loss_lambdas)):
-            self.mel_loss_kwargs_list.append(
-                {'n_fft': cfg.get('n_fft') // mult, 'num_mels': cfg.get('num_mels'), 'sample_rate': self.sample_rate,
-                 'hop_size': cfg.get('hop_size') // mult, 'win_size': cfg.get('win_size') // mult,
-                 'fmin': cfg.get('fmin'),
-                 'fmax': cfg.get('fmax_for_loss')})
-            mult = mult * 2
-        self.mel_kwargs = {'n_fft': cfg.get('n_fft'), 'num_mels': cfg.get('num_mels'), 'sample_rate': self.sample_rate,
-                           'hop_size': cfg.get('hop_size'), 'win_size': cfg.get('win_size'), 'fmin': cfg.get('fmin'),
-                           'fmax': cfg.get('fmax')}
+        if self.mel_loss_lambdas != None:
+            self.mel_loss_kwargs_list = []
+            mult = 1
+            for i in range(len(self.mel_loss_lambdas)):
+                self.mel_loss_kwargs_list.append(
+                    {'n_fft': cfg.get('n_fft') // mult, 'num_mels': cfg.get('num_mels'), 'sample_rate': self.sampling_rate,
+                    'hop_size': cfg.get('hop_size') // mult, 'win_size': cfg.get('win_size') // mult,
+                    'fmin': cfg.get('fmin'),
+                    'fmax': cfg.get('fmax_for_loss')})
+                mult = mult * 2
+            self.mel_kwargs = {'n_fft': cfg.get('n_fft'), 'num_mels': cfg.get('num_mels'), 'sample_rate': self.sampling_rate,
+                            'hop_size': cfg.get('hop_size'), 'win_size': cfg.get('win_size'), 'fmin': cfg.get('fmin'),
+                            'fmax': cfg.get('fmax')}
 
-        # Check if the datasets are Hugging Face datasets or local directories
-        if isinstance(train_audio_path, str) and os.path.isdir(train_audio_path):
-            # Local dataset
-            self.ds = RawAudioDataset(data_dir=train_audio_path, mode='train')
+
+        if self.train_audio_path == 'parquet':
+            train_urls = read_urls_from_file(self.train_files)
+            train_data_files = {"train": train_urls}
+            self.ds = load_dataset("parquet", data_files=train_data_files, streaming=self.stream_train_data)['train']
+        elif os.path.isdir(self.train_audio_path):
+            self.ds = RawAudioDataset(data_dir=self.train_audio_path, mode='train')
         else:
-            # Hugging Face dataset
-            self.ds = load_dataset("parquet", data_files=train_audio_path)['train']
+            self.ds = load_dataset(self.train_audio_path, split='train', streaming=self.stream_train_data)
 
-        if isinstance(val_audio_path, str) and os.path.isdir(val_audio_path):
-            # Local dataset
-            self.valid_ds = RawAudioDataset(data_dir=val_audio_path, mode='val')
+        if self.val_audio_path == 'parquet':
+            val_urls = read_urls_from_file(self.val_files)
+            val_data_files = {"val": val_urls}
+            self.valid_ds = load_dataset("parquet", data_files=val_data_files, streaming=self.stream_val_data)['val']
+        elif os.path.isdir(self.val_audio_path):    
+            self.valid_ds = RawAudioDataset(data_dir=self.val_audio_path, mode='val')
         else:
-            # Hugging Face dataset
-            self.valid_ds = load_dataset("parquet", data_files=val_audio_path)['val'].select(range(100))
+            self.valid_ds = load_dataset(self.val_audio_path, split='val', streaming=self.stream_val_data)
 
         if self.is_main:
-            self.print(
-                f'training with dataset of {len(self.ds)} samples and validating with {len(self.valid_ds)} samples')
+            if self.stream_train_data:
+                self.print(f'training with dataset:\n{self.ds}\nvaidating with:\n{self.valid_ds}')
+            else:
+                self.print(
+                    f'training with dataset of {len(self.ds)} samples and validating with {len(self.valid_ds)} samples')
 
-        assert len(self.ds) >= self.batch_size, 'dataset must have sufficient samples for training'
-        assert len(
-            self.valid_ds) >= self.batch_size, f'validation dataset must have sufficient number of samples (currently {len(self.valid_ds)}) for training'
+        if not self.stream_train_data:
+            assert len(self.ds) >= self.batch_size, 'dataset must have sufficient samples for training'
+        if not self.stream_val_data:
+            assert len(
+                self.valid_ds) >= self.batch_size, f'validation dataset must have sufficient number of samples (currently {len(self.valid_ds)}) for training'
 
         # dataloader
         drop_last = cfg.get("drop_last", True)
         num_workers = cfg.get("num_workers")
-        self.dl = get_dataloader(self.ds, batch_size=self.batch_size, shuffle=True, drop_last=drop_last,
+        self.dl = get_dataloader(self.ds, batch_size=self.batch_size, shuffle=not self.stream_train_data, drop_last=drop_last,
                                  num_workers=num_workers, feature_extractor_student=generator_feature_extractor,
                                  feature_extractor_teacher=teacher_feature_extractor,
-                                 teacher_sampling_rate=teacher_sampling_rate,
-                                 student_sampling_rate=generator_sampling_rate, max_length_s=max_length_s)
-        self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=False, drop_last=False,
+                                 teacher_sampling_rate=self.teacher_sampling_rate,
+                                 student_sampling_rate=self.sampling_rate, max_length_s=self.max_length_s)
+        self.valid_dl = get_dataloader(self.valid_ds, batch_size=self.batch_size, shuffle=not self.stream_val_data, drop_last=False,
                                        num_workers=4, feature_extractor_student=generator_feature_extractor,
                                        feature_extractor_teacher=teacher_feature_extractor,
-                                       teacher_sampling_rate=teacher_sampling_rate,
-                                       student_sampling_rate=generator_sampling_rate, max_length_s=max_length_s)
+                                       teacher_sampling_rate=self.teacher_sampling_rate,
+                                       student_sampling_rate=self.sampling_rate, max_length_s=self.max_length_s)
 
         # lr
-        self.lr = cfg.get("learning_rate")
-        self.initial_lr = cfg.get("intial_learning_rate")
+        self.lr = cfg.get("generator_learning_rate")
+        self.initial_lr = cfg.get("initial_generator_learning_rate")
 
         # optimizer
-        self.optim_g = get_optimizer(
-            generator.parameters(),
-            lr=cfg.get("learning_rate"),
-            wd=cfg.get("wd"),
-            betas=cfg.get("betas")
-        )
+        if self.ema_generator:
+            self.optim_g, self.ema_g = get_optimizer_with_ema(
+                self.generator,
+                lr=cfg.get("generator_learning_rate"),
+                wd=cfg.get("wd"),
+                betas=cfg.get("betas"),
+                use_ema=True,
+                ema_decay=cfg.get("ema_decay"),
+                wd_module=cfg.get("wd_module"),
+                wd_ndim=cfg.get("wd_ndim")
+            )
+            self.ema_g = self.ema_g['model_0'] # hard code will be changed later
+        else:
+            self.optim_g = get_optimizer_with_ema(
+                self.generator,
+                lr=cfg.get("generator_learning_rate"),
+                wd=cfg.get("wd"),
+                betas=cfg.get("betas"),
+                use_ema=False,
+                ema_decay=cfg.get("ema_decay"),
+                wd_module=cfg.get("wd_module"),
+                wd_ndim=cfg.get("wd_ndim")
+            )
 
-        self.optim_d = get_optimizer(
-            itertools.chain(*[i.parameters() for i in self.discriminators.values()]),
-            lr=cfg.get("learning_rate"),
-            wd=cfg.get("wd"),
-            betas=cfg.get("betas")
-        )
+        if self.ema_discriminators:
+            self.optim_d, self.ema_ds = get_optimizer_with_ema(
+                self.discriminators,
+                lr=cfg.get("disciminators_learning_rate"),
+                wd=cfg.get("wd"),
+                betas=cfg.get("betas"),
+                use_ema=True,
+                ema_decay=cfg.get("ema_decay"),
+                wd_module=cfg.get("wd_module"),
+                wd_ndim=cfg.get("wd_ndim")
+            )
+        else:
+            self.optim_d = get_optimizer_with_ema(
+                self.discriminators,
+                lr=cfg.get("discriminators_learning_rate"),
+                wd=cfg.get("wd"),
+                betas=cfg.get("betas"),
+                use_ema=False,
+                ema_decay=cfg.get("ema_decay"),
+                wd_module=cfg.get("wd_module"),
+                wd_ndim=cfg.get("wd_ndim")
+            )
+
+        # self.generator_steps_skip = cfg.get('generator_steps_skip', 2)
+        if self.discriminators_warmup_epochs >= self.epochs:
+            assert self.discriminators_warmup_epochs < self.epochs, 'discriminators_warmup_epochs must be less than epochs'
+
 
         # scheduler
-        # num_train_steps = epochs * self.ds.__len__() // (batch_size * grad_accum_every)
-        num_train_steps = self.epochs * self.ds.__len__() // batch_size
-        self.scheduler_g = CosineAnnealingLR(self.optim_g, T_max=num_train_steps)
-        self.scheduler_d = CosineAnnealingLR(self.optim_d, T_max=num_train_steps)
+        if self.stream_train_data:
+            num_gen_train_steps = (self.epochs - self.discriminators_warmup_epochs) * ((self.train_est_len // self.batch_size) // self.gradient_accumulation_steps)
+            num_disc_train_steps = num_gen_train_steps + (self.discriminators_warmup_epochs * ((self.train_est_len // self.batch_size) // self.gradient_accumulation_steps))
+        else:
+            # num_train_steps = self.epochs * self.ds.__len__() // (self.gradient_accumulation_steps * self.batch_size)
+            num_gen_train_steps = (self.epochs - self.discriminators_warmup_epochs) * ((len(self.ds) // self.batch_size) // self.gradient_accumulation_steps)
+            num_disc_train_steps = num_gen_train_steps + (self.discriminators_warmup_epochs * ((len(self.ds) // self.batch_size) // self.gradient_accumulation_steps))
+        # self.scheduler_g = CosineAnnealingLR(self.optim_g, T_max=num_train_steps)
+        # self.scheduler_d = CosineAnnealingLR(self.optim_d, T_max=num_train_steps)
+        self.scheduler_g = get_cosine_schedule_with_warmup(
+            self.optim_g,
+            num_warmup_steps=int(self.num_warmup_steps*num_gen_train_steps),
+            num_training_steps=num_gen_train_steps  
+        )
+
+        self.scheduler_d = get_cosine_schedule_with_warmup(
+            self.optim_d,
+            num_warmup_steps=int(self.num_warmup_steps*num_disc_train_steps),
+            num_training_steps=num_disc_train_steps
+        )
 
         # prepare with accelerator
 
@@ -241,20 +332,27 @@ class MimiTrainer(nn.Module):
             self.valid_dl
         )
         self.discriminators = {k: self.accelerator.prepare(v) for k, v in self.discriminators.items()}
+        if self.ema_generator:
+            self.ema_g = self.accelerator.prepare(self.ema_g)
+        if self.ema_discriminators:
+            self.ema_ds = {k: self.accelerator.prepare(v) for k, v in self.ema_ds.items()}
 
-        hps = {"num_train_steps": num_train_steps, "num_warmup_steps": self.num_warmup_steps, "learning_rate": self.lr,
+        hps = {"num_train_steps": num_gen_train_steps, "num_warmup_steps": self.num_warmup_steps, "learning_rate": self.lr,
                "initial_learning_rate": self.initial_lr, "epochs": self.epochs}
-        self.accelerator.init_trackers("Mimi", config=hps)
-        self.best_dev_mel_loss = float('inf')
+        self.accelerator.init_trackers("Meomeo", config=hps)
+        self.best_dev_loss = float('inf')
         self.plot_gt_once = False
 
-    def save(self, path, best_dev_mel_loss):
-        if best_dev_mel_loss < self.best_dev_mel_loss:
-            self.best_dev_mel_loss = best_dev_mel_loss
+    def save(self, path, best_dev_loss):
+        if best_dev_loss <= self.best_dev_loss:
+            self.best_dev_loss = best_dev_loss
             torch.save(self.accelerator.get_state_dict(self.generator), f'{self.results_folder}/Mimi_best_dev.pt')
+
         ckpts = sorted(Path(path).parent.glob(f'MimiTrainer_*'))
         if len(ckpts) > self.num_ckpt_keep:
             [os.remove(c) for c in ckpts[:-self.num_ckpt_keep]]
+
+        # Prepare dictionary for saving all the necessary models, optimizers, and EMA states
         pkg = dict(
             generator=self.accelerator.get_state_dict(self.generator),
             discriminators={k: self.accelerator.get_state_dict(v) for k, v in self.discriminators.items()},
@@ -262,32 +360,54 @@ class MimiTrainer(nn.Module):
             optim_d=self.optim_d.state_dict(),
             scheduler_g=self.scheduler_g.state_dict(),
             scheduler_d=self.scheduler_d.state_dict(),
-            best_dev_mel_loss=self.best_dev_mel_loss
+            best_dev_loss=self.best_dev_loss
         )
+
+        # Include EMA models in the saved dictionary if they exist
+        if self.ema_generator:
+            pkg['ema_generator'] = self.accelerator.get_state_dict(self.ema_g)
+
+        if self.ema_discriminators:
+            pkg['ema_discriminators'] = {k: self.accelerator.get_state_dict(v) for k, v in self.ema_ds.items()}
+
         torch.save(pkg, path)
+
 
     def load(self, path=None, restore_optimizer=True):
         if not exists(path):
             ckpts = sorted(self.results_folder.glob(f'MimiTrainer_*'))
             path = str(ckpts[-1])
+
         generator = self.accelerator.unwrap_model(self.generator)
         pkg = torch.load(path, map_location='cpu')
+
+        # Load the main generator and discriminators
         generator.load_state_dict(pkg['generator'])
         discriminators = {k: self.accelerator.unwrap_model(v) for k, v in self.discriminators.items()}
         map(lambda kv: kv[1].load_state_dict(pkg['discriminators'][kv[0]]), discriminators.items())
 
+        # If optimizer and scheduler need to be restored
         if restore_optimizer:
             self.optim_d.load_state_dict(pkg['optim_d'])
             self.scheduler_d.load_state_dict(pkg['scheduler_d'])
             self.optim_g.load_state_dict(pkg['optim_g'])
             self.scheduler_g.load_state_dict(pkg['scheduler_g'])
-            if 'best_dev_mel_loss' in pkg.keys():
-                self.best_dev_mel_loss = pkg['best_dev_mel_loss']
+
+            if 'best_dev_loss' in pkg.keys():
+                self.best_dev_loss = pkg['best_dev_loss']
                 if self.is_main:
-                    self.print(f'The best dev mel loss before is {self.best_dev_mel_loss}')
+                    self.print(f'The best dev loss before is {self.best_dev_loss}')
 
             # + 1 to start from the next step and avoid overwriting the last checkpoint
             self.steps = torch.tensor([checkpoint_num_steps(path) + 1], device=self.device)
+
+        # Load EMA models if they exist in the checkpoint
+        if 'ema_generator' in pkg and self.ema_generator:
+            self.ema_g.load_state_dict(pkg['ema_generator'])
+
+        if 'ema_discriminators' in pkg and self.ema_discriminators:
+            for k, v in self.ema_ds.items():
+                v.load_state_dict(pkg['ema_discriminators'][k])
 
     def print(self, msg):
         self.accelerator.print(msg)
@@ -308,11 +428,11 @@ class MimiTrainer(nn.Module):
     def is_local_main(self):
         return self.accelerator.is_local_main_process
 
-    def warmup(self, step):
-        if step < self.num_warmup_steps:
-            return self.initial_lr + (self.lr - self.initial_lr) * step / self.num_warmup_steps
-        else:
-            return self.lr
+    # def warmup(self, step):
+    #     if step < self.num_warmup_steps:
+    #         return self.initial_lr + (self.lr - self.initial_lr) * step / self.num_warmup_steps
+    #     else:
+    #         return self.lr
 
     def log(self, values: dict, step, type=None, **kwargs):
         if type == 'figure':
@@ -325,249 +445,439 @@ class MimiTrainer(nn.Module):
             for k, v in values.items():
                 self.writer.add_scalar(k, v, global_step=step)
 
-    def train(self):
+    def get_teacher_semantic_token_by_last(self, inputs):
+        with torch.no_grad():
+            outputs_teacher = self.teacher(inputs).last_hidden_state
+        semantic_feature = nn.functional.pad(
+            outputs_teacher.transpose(1, 2),
+            pad=(4, 4),
+            mode="reflect"
+        )
+        semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8, stride=4).transpose(1, 2)
+        return semantic_feature
 
+    def get_teacher_semantic_token_by_mean(self, inputs):
+        with torch.no_grad():
+            outputs_teacher = self.teacher(inputs, output_hidden_states=True).hidden_states
+        mean_hidden_states = torch.mean(torch.stack(outputs_teacher), dim=0)
+        semantic_feature = nn.functional.pad(
+            mean_hidden_states.transpose(1, 2),
+            pad=(4, 4),
+            mode="reflect"
+        )
+        semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8, stride=4).transpose(1, 2)
+        return semantic_feature
+
+    def get_all_generator_loss(self, x, x_hat, feature, semantic_feature, discriminator_outputs, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss):
+        loss_recon = recon_loss(x, x_hat)
+        loss_mel = sum(
+            mel_lambda * mel_loss(x, x_hat, **mel_kwargs)
+            for mel_lambda, mel_kwargs in zip(self.mel_loss_lambdas, self.mel_loss_kwargs_list)
+        )
+        avg_mel_loss += loss_mel.item()
+
+        loss_feature = sum(feature_loss(*output[2:]) for output in discriminator_outputs)
+        loss_adversarial = sum(adversarial_loss(output[1]) for output in discriminator_outputs)
+        loss_distill = self.distill_loss(feature, semantic_feature)
+
+        loss_generator_all = (
+            loss_feature * self.feature_loss_lambda +
+            loss_adversarial * self.adversarial_loss_lambda +
+            loss_distill * self.distill_loss_lambda +
+            loss_recon * self.recon_loss_lambda +
+            loss_mel
+        )
+        avg_generator_loss += loss_generator_all.item()
+        avg_distill_loss += loss_distill.item()
+        avg_feature_loss += loss_feature.item()
+        avg_adversarial_loss += loss_adversarial.item()
+        avg_recon_loss += loss_recon.item()
+        return loss_generator_all, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss
+    
+    def get_generator_loss_without_mel(self, x, x_hat, feature, semantic_feature, discriminator_outputs, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss):
+        loss_recon = recon_loss(x, x_hat)
+        loss_feature = sum(feature_loss(*output[2:]) for output in discriminator_outputs)
+        loss_adversarial = sum(adversarial_loss(output[1]) for output in discriminator_outputs)
+        loss_distill = self.distill_loss(feature, semantic_feature)
+
+        loss_generator_all = (
+            loss_feature * self.feature_loss_lambda +
+            loss_adversarial * self.adversarial_loss_lambda +
+            loss_distill * self.distill_loss_lambda +
+            loss_recon * self.recon_loss_lambda
+        )
+        avg_generator_loss += loss_generator_all.item()
+        avg_distill_loss += loss_distill.item()
+        avg_feature_loss += loss_feature.item()
+        avg_adversarial_loss += loss_adversarial.item()
+        avg_recon_loss += loss_recon.item()
+        return loss_generator_all, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, 0, avg_recon_loss
+    
+    def get_generator_loss_without_recon(self, x, x_hat, feature, semantic_feature, discriminator_outputs, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss):
+        loss_mel = sum(
+            mel_lambda * mel_loss(x, x_hat, **mel_kwargs)
+            for mel_lambda, mel_kwargs in zip(self.mel_loss_lambdas, self.mel_loss_kwargs_list)
+        )
+        avg_mel_loss += loss_mel.item()
+
+        loss_feature = sum(feature_loss(*output[2:]) for output in discriminator_outputs)
+        loss_adversarial = sum(adversarial_loss(output[1]) for output in discriminator_outputs)
+        loss_distill = self.distill_loss(feature, semantic_feature)
+
+        loss_generator_all = (
+            loss_feature * self.feature_loss_lambda +
+            loss_adversarial * self.adversarial_loss_lambda +
+            loss_distill * self.distill_loss_lambda +
+            loss_mel
+        )
+        avg_generator_loss += loss_generator_all.item()
+        avg_distill_loss += loss_distill.item()
+        avg_feature_loss += loss_feature.item()
+        avg_adversarial_loss += loss_adversarial.item()
+        avg_mel_loss += loss_mel.item()
+        return loss_generator_all, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_mel_loss, 0
+    
+    def get_generator_loss_without_mel_and_recon(self, x, x_hat, feature, semantic_feature, discriminator_outputs, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss):
+        loss_feature = sum(feature_loss(*output[2:]) for output in discriminator_outputs)
+        loss_adversarial = sum(adversarial_loss(output[1]) for output in discriminator_outputs)
+        loss_distill = self.distill_loss(feature, semantic_feature)
+
+        print('check')
+        print('loss_feature requires_grad:', loss_feature.requires_grad)
+        print('loss_adversarial requires_grad:', loss_adversarial.requires_grad)
+        print('loss_distill requires_grad:', loss_distill.requires_grad)
+
+        loss_generator_all = (
+            loss_feature * self.feature_loss_lambda +
+            loss_adversarial * self.adversarial_loss_lambda +
+            loss_distill * self.distill_loss_lambda
+        )
+        avg_generator_loss += loss_generator_all.item()
+        avg_distill_loss += loss_distill.item()
+        avg_feature_loss += loss_feature.item()
+        avg_adversarial_loss += loss_adversarial.item()
+        return loss_generator_all, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, 0, 0
+
+    def train(self):
+        # torch.autograd.set_detect_anomaly(True)
+        print(self.accelerator.gradient_accumulation_steps)
         self.generator.train()
-        map(lambda disc: disc.train(), self.discriminators.values())
+        for disc in self.discriminators.values():
+            disc.train()
+
+        if self.teacher_semantic_token_type == 'last':
+            get_teacher_semantic_token = self.get_teacher_semantic_token_by_last
+        elif self.teacher_semantic_token_type == 'mean':
+            get_teacher_semantic_token = self.get_teacher_semantic_token_by_mean
+
+        if self.mel_loss_lambdas == None and self.recon_loss_lambda == None:
+            get_generator_loss = self.get_generator_loss_without_mel_and_recon
+
+        if self.mel_loss_lambdas == None and self.recon_loss_lambda != None:
+            get_generator_loss = self.get_generator_loss_without_mel
+
+        if self.mel_loss_lambdas != None and self.recon_loss_lambda == None:
+            get_generator_loss = self.get_generator_loss_without_recon
+
+        if self.mel_loss_lambdas != None and self.recon_loss_lambda != None:
+            get_generator_loss = self.get_all_generator_loss
+
         step_time_log = {}
 
         steps = int(self.steps.item())
-        if steps < self.num_warmup_steps:
-            lr = self.warmup(steps)
-            for param_group in self.optim.param_groups:
-                param_group['lr'] = lr
+
+        lr = self.scheduler_g.get_last_lr()[0]
+
+        avg_generator_loss = 0.
+        avg_distill_loss = 0.
+
+        avg_disc_loss = 0.
+        avg_feature_loss = 0.
+        avg_adversarial_loss = 0.
+        avg_mel_loss = 0.
+        avg_recon_loss = 0.
+
+        discriminators_steps = 0
+        generator_steps = 0
+
+        batch_disc_steps = 0
+        batch_gen_steps = 0
+
+        if self.stream_train_data:
+            drop_last_point = (self.train_est_len // self.batch_size) // self.gradient_accumulation_steps
         else:
-            self.scheduler_d.step()
-            self.scheduler_g.step()
-            lr = self.scheduler_d.get_last_lr()[0]
+            drop_last_point = (len(self.ds) // self.batch_size) // self.gradient_accumulation_steps
 
         for epoch in range(self.epochs):
             if self.is_main:
-                print(f'Epoch:{epoch} start...')
+                print(f'Epoch {epoch} start...')
 
             for batch in self.dl:
-
+                # print('step', steps)
                 tic = time.time()
-
                 x, inputs_teacher = batch
-                # x = inputs_student.squeeze(0)
-                # x = x.to(self.device)
-                # inputs_student = inputs_student.to(self.device)
-                # inputs_teacher = inputs_teacher.to(self.device)
-                # print('x')
-                # print(x)
-                # print(x.shape)
-                # print('inputs_student')
-                # print(inputs_student)
-                # print(inputs_student.shape)
-                # print('inputs_teacher')
-                # print(inputs_teacher)
-                # print(inputs_teacher.shape)
-                with torch.no_grad():
-                    outputs_teacher = self.teacher(inputs_teacher)
-                semantic_feature = outputs_teacher.last_hidden_state
-                # print('org teacher_semantic token')
-                # print(semantic_feature.shape)
-                semantic_feature = nn.functional.pad(
-                    semantic_feature.transpose(1, 2),  # Transpose to [Batch, Seq Length, Channels]
-                    pad=(4, 4),  # Symmetric padding
-                    mode="reflect"
-                )
-                semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8,
-                                                            stride=4).transpose(1, 2)
-                # print('teacher semantic token')
-                # print(semantic_feature)
-                # print(semantic_feature.shape)
-                model_outs = self.generator(x)
-                discretes, x_hat, feature = model_outs.audio_codes, model_outs.audio_values, model_outs.semantic_token
-                # print('x_hat')
-                # print(x_hat)
-                # print(x_hat.shape)
-                # print('feature')
-                # print(feature)
-                # print(feature.shape)
-                # print(len(feature))
-                # print('discretes')
-                # print(discretes)
-                # print(discretes.shape)
+                # with torch.no_grad():
+                #     outputs_teacher = self.teacher(inputs_teacher)
+                # semantic_feature = nn.functional.pad(
+                #     outputs_teacher.last_hidden_state.transpose(1, 2),
+                #     pad=(4, 4),
+                #     mode="reflect"
+                # )
+                # semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8, stride=4).transpose(1, 2)
 
-                # Discriminators
-                self.optim_d.zero_grad()
-                discriminator_outputs = list(map(lambda disc: disc(x, x_hat.detach()), self.discriminators.values()))
-                loss_disc_all = sum(map(lambda x: discriminator_loss(*x[:2]), discriminator_outputs))
+                semantic_feature = get_teacher_semantic_token(inputs_teacher)
 
-                self.accelerator.backward(loss_disc_all)
-                self.optim_d.step()
+                do_quantize = random.choices([True, False], weights=[self.quantization_rate, 1 - self.quantization_rate], k=1)[0]
+                nq = random.randint(self.min_nq, self.max_nq)
 
-                # Generator
-                self.optim_g.zero_grad()
-                discriminator_outputs = list(map(lambda disc: disc(x, x_hat), self.discriminators.values()))
-                loss_recon = recon_loss(x, x_hat)
-                loss_mel = sum(map(lambda mel_k: mel_k[0] * mel_loss(x, x_hat, **mel_k[1]),
-                                   zip(self.mel_loss_lambdas, self.mel_loss_kwargs_list)))
-                loss_feature = sum(map(lambda x: feature_loss(*x[2:]), discriminator_outputs))
-                loss_adversarial = sum(map(lambda x: adversarial_loss(x[1]), discriminator_outputs))
-                loss_distill = self.distill_loss(feature, semantic_feature)
-                loss_generator_all = loss_feature + loss_adversarial + loss_mel + loss_recon * self.recon_loss_lambda + self.distill_loss_lambda * loss_distill
-                self.accelerator.backward(loss_generator_all)
-                # if exists(self.max_grad_norm):
-                #     self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-                self.optim_g.step()
-
-                # Remove the detached tensors from the computational graph
-                x = x.detach()
-                x_hat = x_hat.detach()
-
-                step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
-                # self.accelerator.wait_for_everyone()
-
-                # log
-                if self.is_main and not (steps % self.stdout_steps):
-                    with torch.inference_mode():
-                        mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
-                    self.print(
-                        f"Epoch {epoch} -- Step {steps}: Gen Loss: {loss_generator_all.item():0.3f}; Mel Error:{mel_error:0.3f}; Distill Loss: {loss_distill.item():0.3f}; Time cost per step: {step_time_log['time_cost'] / self.stdout_steps:0.3f}s")
-                    step_time_log = {}
-                if self.is_main and not (steps % self.log_steps):
-                    self.log({"train/discriminators loss": loss_disc_all.item(),
-                              "train/generator loss": loss_generator_all.item(),
-                              "train/feature loss": loss_feature.item(),
-                              "train/adversarial loss": loss_adversarial.item(), "train/mel loss": loss_mel.item(),
-                              "train/mel error": mel_error, "train/distillation loss": loss_distill.item(),
-                              "train/learning_rate": lr}, step=steps)
-
-                self.accelerator.wait_for_everyone()
-
-                # validate and save model
-                if self.is_main and not (steps % self.save_model_steps) and steps != 0:
-
-                    self.print('Validation start ...')
-                    # validate
-                    total_mel_error = 0.0
-                    total_distill_loss = 0.0
-                    num = 0
-                    self.generator.eval()
-                    with torch.inference_mode():
-                        for i, batch in tqdm(enumerate(self.valid_dl)):
-                            x, inputs_teacher = batch
-                            # x = inputs_student.squeeze(0)
-                            # x = x.to(self.device)
-                            # inputs_student = inputs_student.to(self.device)
-                            # inputs_teacher = inputs_teacher.to(self.device)
-                            # print('x')
-                            # print(x)
-                            # print(x.shape)
-                            # print('inputs_student')
-                            # print(inputs_student)
-                            # print(inputs_student.shape)
-                            # print('inputs_teacher')
-                            # print(inputs_teacher)
-                            # print(inputs_teacher.shape)
-                            with torch.no_grad():
-                                outputs_teacher = self.teacher(inputs_teacher)
-                            semantic_feature = outputs_teacher.last_hidden_state
-                            # print('org teacher_semantic token')
-                            # print(semantic_feature.shape)
-                            semantic_feature = nn.functional.pad(
-                                semantic_feature.transpose(1, 2),  # Transpose to [Batch, Seq Length, Channels]
-                                pad=(4, 4),  # Symmetric padding
-                                mode="reflect"
-                            )
-                            semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8,
-                                                                        stride=4).transpose(1, 2)
-
-                            # print(x.shape)
-                            # x = x.unsqueeze(1)
-                            # x = x.squeeze().numpy()
-
-                            # print('teacher semantic token')
-                            # print(semantic_feature)
-                            # print(semantic_feature.shape)
-                            model_outs = self.generator(x)
-                            discretes, x_hat, feature = model_outs.audio_codes, model_outs.audio_values, model_outs.semantic_token
-                            # print('x_hat')
-                            # print(x_hat)
-                            # print(x_hat.shape)
-                            # print('feature')
-                            # print(feature)
-                            # print(feature.shape)
-                            # print(len(feature))
-                            # print('discretes')
-                            # print(discretes)
-                            # print(discretes.shape)
-
-                            mel_error = mel_loss(x, x_hat, **self.mel_loss_kwargs_list[0]).item()
-                            total_mel_error += mel_error
-                            loss_distill = self.distill_loss(feature, semantic_feature).item()
-                            total_distill_loss += loss_distill
-                            num += x.size(0)
-                            if i < self.showpiece_num:
-                                if not self.plot_gt_once:
-                                    self.log({f'groundtruth/x_{i}': x[0].cpu().detach()}, type='audio',
-                                             sample_rate=self.sample_rate, step=steps)
-                                    x_spec = mel_spectrogram(x.squeeze(1), **self.mel_kwargs)
-                                    self.log({f'groundtruth/x_spec_{i}': plot_spectrogram(x_spec[0].cpu().numpy())},
-                                             type='figure', step=steps)
-
-                                self.log({f'generate/x_hat_{i}': x_hat[0].cpu().detach()}, type='audio',
-                                         sample_rate=self.sample_rate, step=steps)
-                                x_hat_spec = mel_spectrogram(x_hat.squeeze(1), **self.mel_kwargs)
-                                self.log({f'generate/x_hat_spec_{i}': plot_spectrogram(x_hat_spec[0].cpu().numpy())},
-                                         type='figure', step=steps)
-                            # Remove the detached tensors from the computational graph
-                            x = x.detach()
-                            x_hat = x_hat.detach()
-                        if not self.plot_gt_once:
-                            self.plot_gt_once = True
-                        self.print(
-                            f'{steps}: dev mel error: {total_mel_error / num:0.3f}\tdev distill loss: {total_distill_loss / num:0.3f}')
-                        self.log(
-                            {'dev/mel error': total_mel_error / num, 'dev/distillation loss': total_distill_loss / num},
-                            step=steps)
-
-                    # save model
-                    model_path = str(self.results_folder / f'MimiTrainer_{steps:08d}')
-                    self.save(model_path, total_mel_error / num)
-                    self.print(f'{steps}: saving model to {str(self.results_folder)}')
+                if epoch >= self.discriminators_warmup_epochs:
+                    for param in self.generator.parameters():
+                            param.requires_grad = True
                     self.generator.train()
-                    print('back to train')
 
-                # Update lr
-                self.steps += 1
-                steps = int(self.steps.item())
-                if steps < self.num_warmup_steps:
-                    lr = self.warmup(steps)
-                    for param_group in self.optim_g.param_groups:
-                        param_group['lr'] = lr
-                    for param_group in self.optim_d.param_groups:
-                        param_group['lr'] = lr
+                    for disc in self.discriminators.values():
+                        for param in disc.parameters():
+                            param.requires_grad = True
+                        disc.train()
+
+                    model_outs = self.generator(input_values=x, num_quantizers=nq, do_quantize=do_quantize)
+                    x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
+                    # x_hat_detached = x_hat.detach().clone()
+                    if torch.isnan(feature).any():
+                        print("NaN detected in feature (student embedding)")
+                    if torch.isnan(semantic_feature).any():
+                        print("NaN detected in target_feature (teacher embedding)")
+
+                    with self.accelerator.accumulate(self.discriminators, self.generator):
+                        # print('x_hat before', x_hat.requires_grad)
+                        # with torch.no_grad():
+                        #     discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
+                        # print('x_hat after', x_hat.requires_grad)
+                        # print('discriminator_outputs', discriminator_outputs[0][0][0].requires_grad)
+                        
+                        for disc in self.discriminators.values():
+                            for param in disc.parameters():
+                                param.requires_grad = False
+                            # disc.eval()
+                        discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
+                        for disc in self.discriminators.values():
+                            for param in disc.parameters():
+                                param.requires_grad = True
+                            # disc.train()
+# 
+                        # x_hat_detached = x_hat.detach().clone()
+                        x_hat_clone = x_hat.clone()
+                        detach_discriminator_outputs = [disc(x, x_hat_clone.detach()) for disc in self.discriminators.values()]
+                        loss_disc_all = sum(discriminator_loss(*output[:2]) for output in detach_discriminator_outputs)
+                        avg_disc_loss += loss_disc_all.item()
+                        self.accelerator.backward(loss_disc_all)
+                        self.optim_d.step()
+                        # print(f'epoch {epoch}, step {steps}')
+                        self.scheduler_d.step()
+                        self.optim_d.zero_grad()
+                        if self.accelerator.sync_gradients and self.is_main:
+                            discriminators_steps += 1
+                            if self.ema_discriminators:
+                                for name, ema_disc in self.ema_ds.items():
+                                    with torch.no_grad():
+                                        ema_disc.update_parameters(self.discriminators[name])
+
+                            if not (discriminators_steps % self.disc_log_steps):
+                                print('epoch', epoch, 'step', steps, 'discriminators_steps', discriminators_steps)
+                                print(f"Disc Loss: {self.accelerator.gather(avg_disc_loss / (self.gradient_accumulation_steps*self.disc_log_steps))}")
+                                avg_disc_loss = 0.
+
+                        print("x_hat requires_grad:", x_hat.requires_grad)  # Should be True
+
+                        loss_generator_all, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss = get_generator_loss(x, x_hat, feature, semantic_feature, discriminator_outputs, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss)
+                        print("Loss requires_grad:", loss_generator_all.requires_grad)  # Should be True
+                        self.accelerator.backward(loss_generator_all)
+                        print("x_hat grad:", x_hat.grad)
+                        for name, disc in self.discriminators.items():
+                            for param in disc.parameters():
+                                if param.grad is not None:
+                                    print(f"{name} discriminator parameter {param.shape} has gradients!")
+                                    # exit()
+                        self.optim_g.step()
+                        self.scheduler_g.step()
+                        self.optim_g.zero_grad()
+                        if self.accelerator.sync_gradients and self.is_main:
+                            self.steps += 1
+                            steps = int(self.steps.item())
+                            # Learning rate update
+                            lr = self.scheduler_g.get_last_lr()[0]
+
+                            step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
+                            batch_gen_steps += 1
+                            generator_steps += 1
+                            if self.ema_generator:
+                                with torch.no_grad():
+                                    self.ema_g.update_parameters(self.generator)
+
+                            if not (generator_steps % self.gen_log_steps):
+                                self.print(
+                                    f"Epoch {epoch} -- Step {steps} -- Generator steps {generator_steps}: "
+                                    f"Gen Loss: {self.accelerator.gather(avg_generator_loss / (self.gradient_accumulation_steps * self.gen_log_steps))}; "
+                                    f"Distill Loss: {self.accelerator.gather(avg_distill_loss / (self.gradient_accumulation_steps * self.gen_log_steps))}; "
+                                    f"Feature Loss: {self.accelerator.gather(avg_feature_loss / (self.gradient_accumulation_steps * self.gen_log_steps))}; "
+                                    f"Adversarial Loss: {self.accelerator.gather(avg_adversarial_loss / (self.gradient_accumulation_steps * self.gen_log_steps))}; "
+                                    f"Reconstruction Loss: {self.accelerator.gather(avg_recon_loss / (self.gradient_accumulation_steps * self.gen_log_steps))}; "
+                                    f"Mel Loss: {self.accelerator.gather(avg_mel_loss / (self.gradient_accumulation_steps * self.gen_log_steps))}; "
+                                    f"learning rate: {lr}; "
+                                    f"Time cost per step: {step_time_log['time_cost'] / self.gen_log_steps:0.3f}s"
+                                )
+                                self.log({
+                                    "train/generator loss": self.accelerator.gather(avg_generator_loss / (self.gradient_accumulation_steps * self.gen_log_steps)),
+                                    "train/feature loss": self.accelerator.gather(avg_feature_loss / (self.gradient_accumulation_steps * self.gen_log_steps)),
+                                    "train/adversarial loss": self.accelerator.gather(avg_adversarial_loss / (self.gradient_accumulation_steps * self.gen_log_steps)),
+                                    "train/distillation loss": self.accelerator.gather(avg_distill_loss / (self.gradient_accumulation_steps * self.gen_log_steps)),
+                                    "train/learning_rate": lr
+                                }, step=generator_steps)
+                                step_time_log = {}
+                                avg_distill_loss = 0.
+                                avg_generator_loss = 0.
+                                avg_feature_loss = 0.
+                                avg_adversarial_loss = 0.
+                                avg_mel_loss = 0.
+                                avg_recon_loss = 0.
+                            if not (generator_steps % self.save_model_steps):
+                                self.print("Validation start ...")
+                                total_distill_loss = 0.0
+                                total_recon_loss = 0.0
+                                total_disc_loss = 0.0
+                                num = 0
+                                self.generator.eval()
+                                with torch.no_grad():
+                                    for i, batch in tqdm(enumerate(self.valid_dl)):
+                                        # print('validating')
+                                        x, inputs_teacher = batch
+                                        # with torch.no_grad():
+                                        outputs_teacher = self.teacher(inputs_teacher)
+                                        # print(f"inputs_teacher device: {inputs_teacher.device}")
+                                        # print('teacher output')
+                                        # inputs_teacher = inputs_teacher.to(self.device)
+                                        # print(f"inputs_teacher device: {inputs_teacher.device}")
+                                        semantic_feature = nn.functional.pad(
+                                            outputs_teacher.last_hidden_state.transpose(1, 2),
+                                            pad=(4, 4),
+                                            mode="reflect"
+                                        )
+                                        semantic_feature = nn.functional.avg_pool1d(semantic_feature, kernel_size=8, stride=4).transpose(1, 2)
+
+                                        model_outs = self.generator(input_values=x, num_quantizers=8, do_quantize=True)
+                                        x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
+                                        # print('generator output')
+
+                                        discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
+                                        loss_disc_all = sum(discriminator_loss(*output[:2]) for output in discriminator_outputs)
+
+                                        distill_loss = self.distill_loss(feature, semantic_feature).item()
+                                        loss_recon = recon_loss(x, x_hat).item()
+
+                                        total_distill_loss += distill_loss
+                                        total_recon_loss += loss_recon
+                                        total_disc_loss += loss_disc_all
+                                        num += x.size(0)
+                                        
+                                    self.print(
+                                        f'{generator_steps}: dev recon loss: {total_recon_loss / num}\tdev disc loss: {total_disc_loss / num}\tdev distill loss: {total_distill_loss / num}')
+                                    self.log(
+                                        {'dev/recon loss': total_recon_loss / num, 'dev/distillation loss': total_distill_loss / num},
+                                        step=generator_steps)
+
+                                    # save model
+                                    model_path = str(self.results_folder / f'MimiTrainer_{generator_steps:08d}')
+                                    self.save(model_path, (total_distill_loss / num) + (total_recon_loss / num) * 2)
+                                    self.print(f'{generator_steps}: saving model to {str(self.results_folder)}')
+                                    # self.generator.train()
+                                    print('back to train')
+
+                            if batch_gen_steps >= drop_last_point:
+                                self.steps += 1
+                                steps = int(self.steps.item())
+                                # Learning rate update
+                                lr = self.scheduler_g.get_last_lr()[0]
+
+                                step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
+                                batch_gen_steps = 0
+                                break
                 else:
-                    self.scheduler_d.step()
-                    self.scheduler_g.step()
-                    lr = self.scheduler_g.get_last_lr()[0]
+                    # print(steps)
+                    for disc in self.discriminators.values():
+                        for param in disc.parameters():
+                            param.requires_grad = True
+                        disc.train()
+                    for param in self.generator.parameters():
+                        param.requires_grad = False
 
-                # Explicitly delete to manage memory
-                del x
-                # del inputs_student
-                del inputs_teacher
-                del semantic_feature
-                del model_outs
-                del discretes
-                del x_hat
-                del feature
-                del discriminator_outputs
-                del loss_disc_all
-                del loss_recon
-                del loss_mel
-                del loss_feature
-                del loss_adversarial
-                del loss_distill
-                del loss_generator_all
+                    with torch.no_grad():
+                        model_outs = self.generator(input_values=x, num_quantizers=nq, do_quantize=do_quantize)
+                    x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
+                    if torch.isnan(feature).any():
+                        print("NaN detected in feature (student embedding)")
+                        # Add more specific debugging to pinpoint where in the generator it occurs
+                    if torch.isnan(semantic_feature).any():
+                        print("NaN detected in target_feature (teacher embedding)")
 
-                torch.cuda.empty_cache()
+                    # Discriminator update
+                    with self.accelerator.accumulate(self.discriminators):
+                        self.steps += 1
+                        steps = int(self.steps.item())
+                        # Learning rate update
+                        lr = self.scheduler_g.get_last_lr()[0]
 
-        self.print('training complete')
+                        step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
+                        discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
+                        loss_disc_all = sum(discriminator_loss(*output[:2]) for output in discriminator_outputs)
+                        avg_disc_loss += loss_disc_all.item()
+                        self.accelerator.backward(loss_disc_all)
+                        self.optim_d.step()
+                        # print(f'epoch {epoch}, step {steps}')
+                        self.scheduler_d.step()
+                        self.optim_d.zero_grad()
+                        if self.accelerator.sync_gradients and self.is_main:
+                            batch_disc_steps += 1
+                            discriminators_steps += 1
+                            if self.ema_discriminators:
+                                for name, ema_disc in self.ema_ds.items():
+                                    with torch.no_grad():
+                                        ema_disc.update_parameters(self.discriminators[name])
 
-    def continue_train(self):
-        self.load()
+                            if not (discriminators_steps % self.disc_log_steps):
+                                print('epoch', epoch, 'step', steps, 'discriminators_steps', discriminators_steps)
+                                print(
+                                    f"Disc Loss: {self.accelerator.gather(avg_disc_loss / (self.gradient_accumulation_steps * self.disc_log_steps))}")
+                                avg_disc_loss = 0.
+
+                            if not (discriminators_steps % self.save_pretrained_discriminators_steps) and epoch < self.discriminators_warmup_epochs:
+                                # save model
+                                model_path = str(
+                                    self.pretrained_discriminators_folder / f'Pretrained_Discriminators_{discriminators_steps:08d}')
+                                self.save(model_path, 99999)
+                                self.print(
+                                    f'{discriminators_steps}: saving model to {str(self.pretrained_discriminators_folder)}')
+                                
+                            if batch_gen_steps >= drop_last_point:
+                                self.steps += 1
+                                steps = int(self.steps.item())
+                                # Learning rate update
+                                lr = self.scheduler_g.get_last_lr()[0]
+
+                                step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
+                                batch_gen_steps = 0
+                                break
+
+
+            # Save model at the end of the epoch
+            if epoch == self.epochs - 1:
+                model_path = str(self.results_folder / f'MimiTrainer_last')
+                self.save(model_path, self.best_dev_loss + 1)
+                self.print(f'{epoch}: saving model to {str(self.results_folder)}')
+                # self.generator.train()
+
+        self.print('Training complete')
+
+
+    def continue_train(self, checkpoint_path):
+        self.load(path=checkpoint_path)
         self.train()
