@@ -722,7 +722,7 @@ class MimiTrainer(nn.Module):
                                         total_distill_loss += distill_loss
                                         total_recon_loss += loss_recon
                                         total_disc_loss += loss_disc_all
-                                        num += x.size(0)
+                                        num += 1
                                         
                                     self.print(
                                         f'{generator_steps}: dev recon loss: {total_recon_loss / num}\tdev disc loss: {total_disc_loss / num}\tdev distill loss: {total_distill_loss / num}')
