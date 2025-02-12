@@ -765,7 +765,7 @@ class MimiTrainer(nn.Module):
                         self.update_model(self.discriminators, self.optim_d, self.scheduler_d, self.ema_ds)
                         discriminators_steps += 1
 
-                        if not (discriminators_steps % self.disc_log_steps):
+                        if not ((discriminators_steps - self.generator_start_late_steps) % self.disc_log_steps) or discriminators_steps <= self.generator_start_late_steps:
                             # print('Epoch', epoch, 'Step', steps, 'Discriminators_steps', discriminators_steps)
                             loss_dict = {'Discriminator': avg_disc_loss}
                             self.log_loss(self.accelerator, loss_dict, epoch, steps, 'Discriminator', discriminators_steps, self.disc_log_steps)
