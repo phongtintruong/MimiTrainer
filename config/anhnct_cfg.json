@@ -1,9 +1,15 @@
 {   
     "find_unused_parameters": false,
 
-    "max_nq": 32,
-    "min_nq": 2,
     "quantization_rate": 0.5,
+
+    "acoustic_max_nq": 32,
+    "acoustic_min_nq": 2,
+    "acoustic_quantization_dropout": true,
+
+    "semantic_quantization_dropout": false,
+    "semantic_max_nq": 1,
+    "semantic_min_nq": 1,
 
     "teacher_model_path": "nguyenvulebinh/wav2vec2-base-vi",
     "teacher_feature_extractor": "nguyenvulebinh/wav2vec2-base-vi",

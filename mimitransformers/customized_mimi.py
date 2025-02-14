@@ -1,13 +1,17 @@
 from typing import Optional, Union, List, Tuple
+import typing as tp
 from dataclasses import dataclass
 import torch
+import torch.nn.functional as F
 from transformers.cache_utils import Cache, DynamicCache, SlidingWindowCache, StaticCache
 from transformers import MimiModel, MimiConfig
-from transformers.models.mimi.modeling_mimi import MimiSplitResidualVectorQuantizer, MimiOutput, MimiEncoderOutput, MimiModel, MimiResidualVectorQuantizer, MimiDecoderOutput
+from transformers.models.mimi.modeling_mimi import MimiSplitResidualVectorQuantizer, MimiOutput, MimiEncoderOutput, MimiModel, MimiResidualVectorQuantizer, MimiDecoderOutput, MimiEuclideanCodebook, MimiVectorQuantization
 from torch import nn
 from transformers import PreTrainedModel
 from transformers.utils import cached_file, WEIGHTS_NAME, SAFE_WEIGHTS_NAME
 import safetensors.torch
+from einops import rearrange, repeat
+
 
 class MeomeoConfig(MimiConfig):
 
@@ -89,10 +93,236 @@ class MeomeoNoQuantizationEncoderOutput(MimiEncoderOutput):
     semantic_tokens: torch.FloatTensor = None
     encoder_past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None
 
+def default(val: tp.Any, d: tp.Any) -> tp.Any:
+    return val if val is not None else d
+
+
+def ema_inplace(moving_avg, new, decay: float):
+    moving_avg.data.mul_(decay).add_(new, alpha=(1 - decay))
+
+
+def laplace_smoothing(x, n_categories: int, epsilon: float = 1e-5):
+    return (x + epsilon) / (x.sum() + n_categories * epsilon)
+
+
+def uniform_init(*shape: int):
+    t = torch.empty(shape)
+    nn.init.kaiming_uniform_(t)
+    return t
+
+
+def sample_vectors(samples, num: int):
+    num_samples, device = samples.shape[0], samples.device
+
+    if num_samples >= num:
+        indices = torch.randperm(num_samples, device=device)[:num]
+    else:
+        indices = torch.randint(0, num_samples, (num,), device=device)
+
+    return samples[indices]
+
+
+def kmeans(samples, num_clusters: int, num_iters: int = 10):
+    dim, dtype = samples.shape[-1], samples.dtype
+
+    means = sample_vectors(samples, num_clusters)
+
+    for _ in range(num_iters):
+        diffs = rearrange(samples, "n d -> n () d") - rearrange(
+            means, "c d -> () c d"
+        )
+        dists = -(diffs ** 2).sum(dim=-1)
+
+        buckets = dists.max(dim=-1).indices
+        bins = torch.bincount(buckets, minlength=num_clusters)
+        zero_mask = bins == 0
+        bins_min_clamped = bins.masked_fill(zero_mask, 1)
+
+        new_means = buckets.new_zeros(num_clusters, dim, dtype=dtype)
+        new_means.scatter_add_(0, repeat(buckets, "n -> n d", d=dim), samples)
+        new_means = new_means / bins_min_clamped[..., None]
+
+        means = torch.where(zero_mask[..., None], means, new_means)
+
+    return means, bins
+
+class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
+    """Codebook with Euclidean distance."""
+
+    def __init__(self, config: MeomeoConfig, epsilon: float = 1e-5):
+        super().__init__()
+        self.codebook_decay = config.codebook_decay
+        self.codebook_size = config.codebook_size
+        self.codebook_dim = config.codebook_dim
+        self.kmeans_init = config.kmeans_init
+        self.kmeans_iters = config.kmeans_iters
+        self.threshold_ema_dead_code = config.threshold_ema_dead_code
+        init_fn: tp.Union[tp.Callable[..., torch.Tensor], tp.Any] = uniform_init if not self.kmeans_init else torch.zeros
+
+        embed = init_fn(self.codebook_size, self.codebook_dim)
+
+        # self.codebook_size = config.codebook_size
+
+        self.register_buffer("inited", torch.Tensor([not self.kmeans_init]))
+        self.register_buffer("cluster_size", torch.zeros(self.codebook_size))
+        self.register_buffer("embed", embed)
+        self.register_buffer("embed_avg", embed.clone())
+        self.epsilon = epsilon
+
+    @torch.jit.ignore
+    def init_embed_(self, data):
+        if self.inited:
+            return
+
+        embed, cluster_size = kmeans(data, self.codebook_size, self.kmeans_iters)
+        self.embed.data.copy_(embed)
+        self.embed_avg.data.copy_(embed.clone())
+        self.cluster_size.data.copy_(cluster_size)
+        self.inited.data.copy_(torch.Tensor([True]))
+        # Make sure all buffers across workers are in sync after initialization
+        #broadcast_tensors(self.buffers())
+
+    def replace_(self, samples, mask):
+        modified_codebook = torch.where(
+            mask[..., None], sample_vectors(samples, self.codebook_size), self.embed
+        )
+        self.embed.data.copy_(modified_codebook)
+
+    def expire_codes_(self, batch_samples):
+        if self.threshold_ema_dead_code == 0:
+            return
+
+        expired_codes = self.cluster_size < self.threshold_ema_dead_code
+        if not torch.any(expired_codes):
+            return
+
+        batch_samples = rearrange(batch_samples, "... d -> (...) d")
+        self.replace_(batch_samples, mask=expired_codes)
+        #broadcast_tensors(self.buffers())
+
+    # @property
+    # def embed(self) -> torch.Tensor:
+    #     if self._embed is None:
+    #         self._embed = self.embed_sum / self.cluster_usage.clamp(min=self.epsilon)[:, None]
+    #     return self._embed
+
+    def quantize(self, x):
+        embed = self.embed.t()
+        dist = -(
+            x.pow(2).sum(1, keepdim=True)
+            - 2 * x @ embed
+            + embed.pow(2).sum(0, keepdim=True)
+        )
+        embed_ind = dist.max(dim=-1).indices
+        return embed_ind
+
+    # Copied from transformers.models.encodec.modeling_encodec.EncodecEuclideanCodebook.encode
+    def encode(self, hidden_states):
+        shape = hidden_states.shape
+        # pre-process
+        hidden_states = hidden_states.reshape((-1, shape[-1]))
+        # quantize
+        embed_ind = self.quantize(hidden_states)
+        # post-process
+        embed_ind = embed_ind.view(*shape[:-1])
+        return embed_ind
+
+    # Copied from transformers.models.encodec.modeling_encodec.EncodecEuclideanCodebook.decode
+    def decode(self, embed_ind):
+        quantize = F.embedding(embed_ind, self.embed)
+        return quantize
+
+    def forward(self, x):
+        shape, dtype = x.shape, x.dtype
+        x = x.reshape((-1, shape[-1]))
+
+        self.init_embed_(x)
+
+        embed_ind = self.quantize(x)
+        embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(dtype)
+        embed_ind = embed_ind.view(*shape[:-1])
+        quantize = self.decode(embed_ind)
+
+        if self.training:
+            self.expire_codes_(x)
+            ema_inplace(self.cluster_size, embed_onehot.sum(0), self.codebook_decay)
+            embed_sum = x.t() @ embed_onehot
+            ema_inplace(self.embed_avg, embed_sum.t(), self.codebook_decay)
+            cluster_size = (
+                laplace_smoothing(self.cluster_size, self.codebook_size, self.epsilon)
+                * self.cluster_size.sum()
+            )
+            embed_normalized = self.embed_avg / cluster_size.unsqueeze(1)
+            self.embed.data.copy_(embed_normalized)
+
+        return quantize, embed_ind
+    
+
+class MeomeoVectorQuantization(MimiVectorQuantization):
+    def __init__(self, config: MeomeoConfig):
+        super().__init__(config)
+        print('hello MeomeoVectorQuantization')
+        self.codebook = MeomeoEuclideanCodebook(config)
+        self.commitment_loss_lambda = config.commitment_loss_lambda
+
+    def encode(self, hidden_states):
+        hidden_states = hidden_states.permute(0, 2, 1)
+        embed_in = self.codebook.encode(hidden_states)
+        return embed_in
+
+    def decode(self, embed_ind):
+        quantize = self.codebook.decode(embed_ind)
+        quantize = quantize.permute(0, 2, 1)
+        return quantize
+
+    def forward(self, hidden_states):
+        device = hidden_states.device
+        hidden_states = hidden_states.permute(0, 2, 1)
+        quantize, embed_ind = self.codebook(hidden_states)
+        if self.training:
+            quantize = hidden_states + (quantize - hidden_states).detach()
+        loss = torch.tensor([0.0], device=device, requires_grad=self.training)
+        if self.training:
+            if self.commitment_loss_lambda > 0:
+                commit_loss = F.mse_loss(quantize.detach(), hidden_states, reduction="none")
+                commit_loss = commit_loss.mean(dim=[1, 2])
+                loss = loss + self.commitment_loss_lambda * commit_loss
+
+        quantize = quantize.permute(0, 2, 1)
+        return quantize, embed_ind, loss
 
 
 class MeomeoResidualVectorQuantizer(MimiResidualVectorQuantizer):
-    def encode(self, embeddings: torch.Tensor, num_quantizers: Optional[int] = None, output_quantized: Optional[bool] = False) -> torch.Tensor:
+    """Residual Vector Quantizer."""
+
+    def __init__(self, config: MeomeoConfig, max_num_quantizers: int, min_num_quantizers: int, quantization_rate: float):
+        super().__init__(config, max_num_quantizers) #todo: more verify
+        print('hello MeomeoResidualVectorQuantizer')
+
+        self.codebook = config.codebook_size
+        self.frame_rate = config.frame_rate
+        # self.num_quantizers = num_quantizers if num_quantizers is not None else config.num_quantizers
+        self.max_num_quantizers = max_num_quantizers
+        self.min_num_quantizers = min_num_quantizers
+        self.quantization_rate = quantization_rate
+
+        self.layers = nn.ModuleList(
+            [
+                MeomeoVectorQuantization(config)
+                for _ in range(self.num_quantizers)
+            ]
+        )
+        self.input_proj = None
+        self.output_proj = None
+        if config.vector_quantization_hidden_dimension != config.hidden_size:
+            self.input_proj = torch.nn.Conv1d(
+                config.hidden_size, config.vector_quantization_hidden_dimension, 1, bias=False
+            )
+            self.output_proj = torch.nn.Conv1d(
+                config.vector_quantization_hidden_dimension, config.hidden_size, 1, bias=False
+            )
+
+    def encode(self, embeddings: torch.Tensor, num_quantizers: Optional[int] = None) -> torch.Tensor:
         """
         Encode a given input tensor with the specified frame rate at the given number of quantizers / codebooks. The RVQ encode method sets
         the appropriate number of quantizers to use and returns indices for each quantizer.
@@ -102,24 +332,74 @@ class MeomeoResidualVectorQuantizer(MimiResidualVectorQuantizer):
 
         num_quantizers = num_quantizers if num_quantizers is not None else self.num_quantizers
 
-        residual = embeddings.clone()
-        final_quantized = None
+        residual = embeddings
         all_indices = []
         for layer in self.layers[:num_quantizers]:
             indices = layer.encode(residual)
             quantized = layer.decode(indices)
-            final_quantized = quantized if final_quantized is None else final_quantized + quantized
             residual = residual - quantized
             all_indices.append(indices)
         out_indices = torch.stack(all_indices)
-        if output_quantized:
-            # print('final_quantized', final_quantized.shape)
-            # print('original_embeddings', embeddings.shape)
-            final_quantized = self.output_proj(final_quantized)
-            # print('final_quantized', final_quantized.shape)
-            return out_indices, final_quantized
-        else:
-            return out_indices
+        return out_indices
+
+    def decode(self, codes: torch.Tensor) -> torch.Tensor:
+        """Decode the given codes of shape [B, K, T] to the quantized representation."""
+        quantized_out = torch.tensor(0.0, device=codes.device)
+        codes = codes.transpose(0, 1)
+        for i, indices in enumerate(codes):
+            layer = self.layers[i]
+            quantized = layer.decode(indices)
+            quantized_out = quantized_out + quantized
+
+        if self.output_proj is not None:
+            quantized_out = self.output_proj(quantized_out)
+        return quantized_out
+    
+    def forward(self, embeddings: torch.Tensor) -> torch.Tensor:
+        if self.input_proj is not None:
+            embeddings = self.input_proj(embeddings)
+
+        quantized_list = []
+        residual = embeddings
+        
+        for layer in self.layers[:self.max_num_quantizers]:
+            quantized, embed_ind, commitment_loss = layer(residual)
+            residual = residual - quantized
+            quantized_list.append(quantized)
+
+        quantized_stack = torch.stack(quantized_list, dim=0)
+
+        
+        
+
+    # def encode(self, embeddings: torch.Tensor, num_quantizers: Optional[int] = None, output_quantized: Optional[bool] = False) -> torch.Tensor:
+    #     """
+    #     Encode a given input tensor with the specified frame rate at the given number of quantizers / codebooks. The RVQ encode method sets
+    #     the appropriate number of quantizers to use and returns indices for each quantizer.
+    #     """
+    #     if self.input_proj is not None:
+    #         embeddings = self.input_proj(embeddings)
+
+    #     num_quantizers = num_quantizers if num_quantizers is not None else self.num_quantizers
+
+    #     residual = embeddings.clone()
+    #     final_quantized = None
+    #     all_indices = []
+    #     for layer in self.layers[:num_quantizers]:
+    #         indices = layer.encode(residual)
+    #         quantized = layer.decode(indices)
+    #         final_quantized = quantized if final_quantized is None else final_quantized + quantized
+    #         residual = residual - quantized
+    #         all_indices.append(indices)
+    #     out_indices = torch.stack(all_indices)
+    #     if output_quantized:
+    #         # print('final_quantized', final_quantized.shape)
+    #         # print('original_embeddings', embeddings.shape)
+    #         final_quantized = self.output_proj(final_quantized)
+    #         # print('final_quantized', final_quantized.shape)
+    #         return out_indices, final_quantized
+    #     else:
+    #         return out_indices
 
 
 
