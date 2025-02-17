@@ -6,3 +6,7 @@ test*
 *egg-info/
 Log/*
 audio/*
+*.out
+build/*
+*.run
+slurm_scripts/*

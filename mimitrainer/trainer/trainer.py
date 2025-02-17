@@ -20,7 +20,6 @@ from accelerate import Accelerator, DistributedDataParallelKwargs, DataLoaderCon
 from transformers import PreTrainedModel, EncodecFeatureExtractor
 from mimitransformers import SemanticTeacher
 from datasets import load_dataset  # Import Hugging Face datasets
-import random
 
 
 # helpers
@@ -115,8 +114,7 @@ class MimiTrainer(nn.Module):
         self.ema_generator = cfg.get("ema_generator", True)
         self.ema_discriminators = cfg.get("ema_discriminators", False)
 
-        self.max_nq = cfg.get('max_nq', 8)
-        self.min_nq = cfg.get('min_nq', 2)
+
         self.quantization_rate = cfg.get('quantization_rate', 0.5)
         project_name = 'MimiTrainer'
 
@@ -160,6 +158,8 @@ class MimiTrainer(nn.Module):
         self.distill_loss_lambda = cfg.get('distill_loss_lambda')
         self.feature_loss_lambda = cfg.get('feature_loss_lambda')
         self.adversarial_loss_lambda = cfg.get('adversarial_loss_lambda')
+        self.semantic_commitment_loss_lambda = cfg.get('semantic_commitment_loss_lambda')
+        self.acoustic_commitment_loss_lambda = cfg.get('acoustic_commitment_loss_lambda')
         distill_type = cfg.get('distill_type', 'd_axis_mimi')
         if distill_type == 't_axis':
             from functools import partial
@@ -591,6 +591,9 @@ class MimiTrainer(nn.Module):
         avg_mel_loss = 0.
         avg_recon_loss = 0.
 
+        avg_semantic_commit_loss = 0.
+        avg_acoustic_commit_loss = 0.
+
         discriminators_steps = 0
         generator_steps = 0
 
@@ -613,9 +616,6 @@ class MimiTrainer(nn.Module):
 
                 semantic_feature = get_teacher_semantic_token(inputs_teacher)
 
-                do_quantize = random.choices([True, False], weights=[self.quantization_rate, 1 - self.quantization_rate], k=1)[0]
-                nq = random.randint(self.min_nq, self.max_nq)
-
                 if epoch >= self.discriminators_warmup_epochs:
                     for param in self.generator.parameters():
                             param.requires_grad = True
@@ -626,8 +626,10 @@ class MimiTrainer(nn.Module):
                     #         param.requires_grad = True
                     #     disc.train()
 
-                    model_outs = self.generator(input_values=x, num_quantizers=nq, do_quantize=do_quantize)
-                    x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
+                    model_outs = self.generator(input_values=x)
+                    x_hat, feature, semantic_commitment_loss, acoustic_commitment_loss = model_outs.audio_values, model_outs.semantic_tokens, model_outs.semantic_commitment_loss, model_outs.acoustic_commitment_loss
+                    semantic_commitment_loss = semantic_commitment_loss / self.gen_gradient_accumulation_steps
+                    acoustic_commitment_loss = acoustic_commitment_loss / self.gen_gradient_accumulation_steps
                     # x_hat.retain_grad()
                     # x_hat_detached = x_hat.detach().clone()
                     if torch.isnan(feature).any():
@@ -659,6 +661,9 @@ class MimiTrainer(nn.Module):
                         loss_generator_all, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss = get_generator_loss(x, x_hat, feature, semantic_feature, discriminator_outputs, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss, self.gen_gradient_accumulation_steps)
                         # print("Loss requires_grad:", loss_generator_all.requires_grad)  # Should be True
                         # self.accelerator.backward(loss_generator_all)
+                        avg_semantic_commit_loss += semantic_commitment_loss
+                        avg_acoustic_commit_loss += acoustic_commitment_loss
+                        loss_generator_all = loss_generator_all + self.semantic_commitment_loss_lambda * semantic_commitment_loss + self.acoustic_commitment_loss_lambda * acoustic_commitment_loss
                         loss_generator_all.backward()
                         # if x_hat.grad is not None:
                         #     print('x_hat has grad')
@@ -673,7 +678,7 @@ class MimiTrainer(nn.Module):
                             generator_steps += 1
 
                             if not (generator_steps % self.gen_log_steps):
-                                loss_dict = {'Generator': avg_generator_loss, 'Distillation': avg_distill_loss, 'Feature': avg_feature_loss, 'Adversarial': avg_adversarial_loss, 'Reconstruction': avg_recon_loss, 'Mel': avg_mel_loss}
+                                loss_dict = {'Generator': avg_generator_loss, 'Distillation': avg_distill_loss, 'Feature': avg_feature_loss, 'Adversarial': avg_adversarial_loss, 'Reconstruction': avg_recon_loss, 'Mel': avg_mel_loss, 'Semantic Commit': avg_semantic_commit_loss, 'Acoustic Commit': avg_acoustic_commit_loss}
                                 self.log({
                                     "train/generator loss": self.accelerator.gather(avg_generator_loss / (self.gen_log_steps)),
                                     "train/feature loss": self.accelerator.gather(avg_feature_loss / (self.gen_log_steps)),
@@ -688,6 +693,8 @@ class MimiTrainer(nn.Module):
                                 avg_adversarial_loss = loss_dict['Adversarial']
                                 avg_recon_loss = loss_dict['Reconstruction']
                                 avg_mel_loss = loss_dict['Mel']
+                                avg_semantic_commit_loss = loss_dict['Semantic Commit']
+                                avg_acoustic_commit_loss = loss_dict['Acoustic Commit']
 
                                 self.print(
                                     f"learning rate: {lr}; "
@@ -709,7 +716,7 @@ class MimiTrainer(nn.Module):
                                         # with torch.no_grad():
                                         semantic_feature = get_teacher_semantic_token(inputs_teacher)
 
-                                        model_outs = self.generator(input_values=x, num_quantizers=8, do_quantize=True)
+                                        model_outs = self.generator(input_values=x, semantic_nq=1, acoustic_nq=7)
                                         x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
                                         # print('generator output')
 
@@ -772,70 +779,58 @@ class MimiTrainer(nn.Module):
                             avg_disc_loss = loss_dict['Discriminator']
                             # print(avg_disc_loss)
                 else: #todo: verify
-                    # print(steps)
                     for disc in self.discriminators.values():
                         for param in disc.parameters():
                             param.requires_grad = True
                         disc.train()
                     for param in self.generator.parameters():
                         param.requires_grad = False
+                    self.generator.eval()
 
-                    with torch.no_grad():
-                        model_outs = self.generator(input_values=x, num_quantizers=nq, do_quantize=do_quantize)
-                    x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
+                    model_outs = self.generator(input_values=x)
+                    x_hat, feature, semantic_commitment_loss, acoustic_commitment_loss = model_outs.audio_values, model_outs.semantic_tokens, model_outs.semantic_commitment_loss, model_outs.acoustic_commitment_loss
+                    
                     if torch.isnan(feature).any():
                         print("NaN detected in feature (student embedding)")
-                        # Add more specific debugging to pinpoint where in the generator it occurs
                     if torch.isnan(semantic_feature).any():
                         print("NaN detected in target_feature (teacher embedding)")
+        
+                    detach_discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
 
-                    # Discriminator update
-                    with self.accelerator.accumulate(self.discriminators):
-                        self.steps += 1
-                        steps = int(self.steps.item())
-                        # Learning rate update
-                        lr = self.scheduler_g.get_last_lr()[0]
+                    loss_disc_all = sum(discriminator_loss(*output[:2]) for output in detach_discriminator_outputs) / self.disc_gradient_accumulation_steps
+                    avg_disc_loss += loss_disc_all.item()
+                    loss_disc_all.backward()
+                    # if x_hat.grad is not None:
+                    #     print('x_hat has grad')
+                    # found = False
+                    # for name, disc in self.discriminators.items():
+                    #     for param in disc.parameters():
+                    #         if param.grad is not None:
+                    #             print(f"{name} discriminator parameter {param.shape} has gradients!")
+                    #             found = True
+                    #             break
+                    #     if found:
+                    #         break
+                    if (steps + 1) % self.disc_gradient_accumulation_steps == 0 and self.is_main:
+                        self.update_model(self.discriminators, self.optim_d, self.scheduler_d, self.ema_ds)
+                        discriminators_steps += 1
 
-                        step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
-                        discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
-                        loss_disc_all = sum(discriminator_loss(*output[:2]) for output in discriminator_outputs)
-                        avg_disc_loss += loss_disc_all.item()
-                        self.accelerator.backward(loss_disc_all)
-                        self.optim_d.step()
-                        # print(f'epoch {epoch}, step {steps}')
-                        self.scheduler_d.step()
-                        self.optim_d.zero_grad()
-                        if self.accelerator.sync_gradients and self.is_main:
-                            batch_disc_steps += 1
-                            discriminators_steps += 1
-                            if self.ema_discriminators:
-                                for name, ema_disc in self.ema_ds.items():
-                                    with torch.no_grad():
-                                        ema_disc.update_parameters(self.discriminators[name])
+                        if not ((discriminators_steps - self.generator_start_late_steps) % self.disc_log_steps) or discriminators_steps <= self.generator_start_late_steps:
+                            # print('Epoch', epoch, 'Step', steps, 'Discriminators_steps', discriminators_steps)
+                            loss_dict = {'Discriminator': avg_disc_loss}
+                            self.log_loss(self.accelerator, loss_dict, epoch, steps, 'Discriminator', discriminators_steps, self.disc_log_steps)
+                            avg_disc_loss = loss_dict['Discriminator']
 
-                            if not (discriminators_steps % self.disc_log_steps):
-                                print('epoch', epoch, 'step', steps, 'discriminators_steps', discriminators_steps)
-                                print(
-                                    f"Disc Loss: {self.accelerator.gather(avg_disc_loss / (self.gradient_accumulation_steps * self.disc_log_steps))}")
-                                avg_disc_loss = 0.
+                        
+                        if batch_gen_steps >= drop_last_point:
+                            self.steps += 1
+                            steps = int(self.steps.item())
+                            # Learning rate update
+                            lr = self.scheduler_g.get_last_lr()[0]
 
-                            if not (discriminators_steps % self.save_pretrained_discriminators_steps) and epoch < self.discriminators_warmup_epochs:
-                                # save model
-                                model_path = str(
-                                    self.pretrained_discriminators_folder / f'Pretrained_Discriminators_{discriminators_steps:08d}')
-                                self.save(model_path, 99999)
-                                self.print(
-                                    f'{discriminators_steps}: saving model to {str(self.pretrained_discriminators_folder)}')
-                                
-                            if batch_gen_steps >= drop_last_point:
-                                self.steps += 1
-                                steps = int(self.steps.item())
-                                # Learning rate update
-                                lr = self.scheduler_g.get_last_lr()[0]
-
-                                step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
-                                batch_gen_steps = 0
-                                break
+                            step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
+                            batch_gen_steps = 0
+                            break
 
                 self.steps += 1
                 steps = int(self.steps.item())

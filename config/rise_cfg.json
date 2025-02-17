@@ -1,21 +1,9 @@
 {   
-    "num_quantizers": 9,
-
     "find_unused_parameters": false,
 
-    "codebook_decay": 0.99,
-    "kmeans_init": true,
-    "kmeans_iters": 50,
-    "threshold_ema_dead_code": 2,
-
-    "hidden_prj_size": 512,
-    "output_prj_size": 768,
-
-    "acoustic_quantization_skipping_rate": 0,
-    "acoustic_min_nq": 8,
-
-    "semantic_quantization_skipping_rate": 0,
-    "semantic_min_nq": 1,
+    "max_nq": 32,
+    "min_nq": 2,
+    "quantization_rate": 0.5,
 
     "teacher_model_path": "nguyenvulebinh/wav2vec2-base-vi",
     "teacher_feature_extractor": "nguyenvulebinh/wav2vec2-base-vi",
@@ -35,17 +23,15 @@
 
     "msstft_disc_filters": 32,
 
-    "distill_loss_lambda": 1,
+    "distill_loss_lambda": 0.1,
     "feature_loss_lambda": 4,
     "adversarial_loss_lambda": 4,
-    "semantic_commitment_loss_lambda": null,
-    "acoustic_commitment_loss_lambda": null,
     "distill_type": "d_axis_mimi",
 
     "train_audio_path": "parquet",
     "val_audio_path": "parquet",
-    "train_files": "/home/anhnct1/Documents/MimiTrainer/audio/vietbud500_train_files.txt",
-    "val_files": "/home/anhnct1/Documents/MimiTrainer/audio/vietbud500_validation_files.txt",
+    "train_files": "/home/user04/NTTrung/MimiTrainer/audio/vietbud500_train_files.txt",
+    "val_files": "/home/user04/NTTrung/MimiTrainer/audio/vietbud500_validation_files.txt",
     "stream_train_data": false,
     "stream_val_data": false,
     "train_est_len": 634158,
@@ -55,10 +41,10 @@
     "pretrained_discriminators_folder": "Log/spt_base/discriminators",
     "sampling_rate": 24000,
 
-    "batch_size": 2,
+    "batch_size": 4,
     "epochs":2,
-    "gen_gradient_accumulation_steps": 128,
-    "disc_gradient_accumulation_steps": 128,
+    "gen_gradient_accumulation_steps": 64,
+    "disc_gradient_accumulation_steps": 64,
     "generator_steps_skip": 0,
     "generator_start_late_steps": 5,
     "discriminators_warmup_epochs": 0,
@@ -73,16 +59,16 @@
     "ema_freq": 1,
     "ema_generator": true,
     "ema_discriminators": false,
-    "wd": 1e-3,
+    "wd": 2e-6,
     "wd_module": ["encoder_transformer", "decoder_transformer"],
     "wd_ndim": 2,
 
     "seed": 1902,
-    "max_length_s": 2,
+    "max_length_s": 10,
     "num_workers": 8,
     "disc_log_steps": 1,
     "gen_log_steps": 1,
-    "save_model_steps": 2,
+    "save_model_steps": 10,
     "save_pretrained_discriminators_steps": 200,
     "num_ckpt_keep": 10,
     "showpiece_num": 8,

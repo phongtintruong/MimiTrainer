@@ -3,11 +3,11 @@ import typing as tp
 from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
-from transformers.cache_utils import Cache, DynamicCache, SlidingWindowCache, StaticCache
+from transformers.cache_utils import Cache
 from transformers import MimiModel, MimiConfig
-from transformers.models.mimi.modeling_mimi import MimiSplitResidualVectorQuantizer, MimiOutput, MimiEncoderOutput, MimiModel, MimiResidualVectorQuantizer, MimiDecoderOutput, MimiEuclideanCodebook, MimiVectorQuantization
+from transformers.models.mimi.modeling_mimi import MimiSplitResidualVectorQuantizer, MimiOutput, MimiEncoderOutput, MimiModel, MimiResidualVectorQuantizer, MimiEuclideanCodebook, MimiVectorQuantization
 from torch import nn
-from transformers import PreTrainedModel, PretrainedConfig
+from transformers import PretrainedConfig
 from transformers.utils import cached_file, WEIGHTS_NAME, SAFE_WEIGHTS_NAME
 import safetensors.torch
 from einops import rearrange, repeat
@@ -72,47 +72,6 @@ class MeomeoOutput(MimiOutput):
     semantic_commitment_loss: torch.FloatTensor = None
     acoustic_commitment_loss: torch.FloatTensor = None
 
-
-@dataclass
-class MeomeoEncoderOutput(MimiEncoderOutput):
-    """
-    Args:
-        audio_codes (`torch.LongTensor`  of shape `(batch_size, num_quantizers, codes_length)`, *optional*):
-            Discret code embeddings computed using `model.encode`.
-        encoder_past_key_values (`Cache`, *optional*):
-            Pre-computed hidden-states (key and values in the self-attention blocks) that can be used to speed up sequential decoding of the encoder transformer.
-            This typically consists in the `past_key_values` returned by the model at a previous stage of decoding, when `use_cache=True` or `config.use_cache=True`.
-
-            The model will output the same cache format that is fed as input.
-
-            If `past_key_values` are used, the user can optionally input only the last `audio_values` or `audio_codes (those that don't
-            have their past key value states given to this model).
-    """
-
-    audio_codes: torch.LongTensor = None
-    semantic_tokens: torch.FloatTensor = None
-    encoder_past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None
-
-
-@dataclass
-class MeomeoNoQuantizationEncoderOutput(MimiEncoderOutput):
-    """
-    Args:
-        audio_codes (`torch.LongTensor`  of shape `(batch_size, num_quantizers, codes_length)`, *optional*):
-            Discret code embeddings computed using `model.encode`.
-        encoder_past_key_values (`Cache`, *optional*):
-            Pre-computed hidden-states (key and values in the self-attention blocks) that can be used to speed up sequential decoding of the encoder transformer.
-            This typically consists in the `past_key_values` returned by the model at a previous stage of decoding, when `use_cache=True` or `config.use_cache=True`.
-
-            The model will output the same cache format that is fed as input.
-
-            If `past_key_values` are used, the user can optionally input only the last `audio_values` or `audio_codes (those that don't
-            have their past key value states given to this model).
-    """
-
-    embeddings: torch.FloatTensor = None
-    semantic_tokens: torch.FloatTensor = None
-    encoder_past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None
 
 def default(val: tp.Any, d: tp.Any) -> tp.Any:
     return val if val is not None else d
@@ -380,25 +339,37 @@ class MeomeoResidualVectorQuantizer(MimiResidualVectorQuantizer):
             quantized_out = self.output_proj(quantized_out)
         return quantized_out
     
-    def forward(self, embeddings: torch.Tensor):
+    def forward(self, embeddings: torch.Tensor, nq: int):
         if self.input_proj is not None:
             embeddings = self.input_proj(embeddings)
 
         quantized_list = []
         commitment_loss_list = []
+        embed_ind_list = []
         residual = embeddings
+
+        nq_tmp = nq if nq != None else self.max_num_quantizers
         
-        for layer in self.layers[:self.max_num_quantizers]:
+        for layer in self.layers[:nq_tmp]:
             quantized, embed_ind, commitment_loss = layer(residual)
             residual = residual - quantized
             quantized_list.append(quantized)
+            embed_ind_list.append(embed_ind)
             commitment_loss_list.append(commitment_loss)
 
         quantized_stack = torch.stack(quantized_list, dim=0)
+        embed_ind_stack = torch.stack(embed_ind_list, dim=0)
         commitment_loss_stack = torch.stack(commitment_loss_list, dim=0)
         batch_size = quantized_stack.shape[1]
+        if nq != None or self.min_num_quantizers == None:
+            assert nq <= self.max_num_quantizers, f'nq cant be bigger than {self.max_num_quantizers}'
 
-        if self.min_num_quantizers != None:
+            print('rvq infer')
+            quantized_out = quantized_stack.sum(dim=0)
+            commitment_loss_out = commitment_loss_stack.sum(dim=0)
+            embed_ind_out = embed_ind_stack
+
+        else:
             nq_values = torch.randint(low=self.min_num_quantizers, high=self.max_num_quantizers + 1, size=(batch_size,))
             num_zero_nqs = int(batch_size * self.quantization_skipping_rate)
             zero_nq_indices = torch.randperm(batch_size)[:num_zero_nqs]
@@ -411,20 +382,17 @@ class MeomeoResidualVectorQuantizer(MimiResidualVectorQuantizer):
 
             quantized_out = quantized_stack * quantized_mask
             commitment_loss_out = commitment_loss_stack * commitment_loss_mask
+            embed_ind_out = embed_ind_stack * commitment_loss_mask
 
             quantized_out = quantized_out.sum(dim=0)
             quantized_out[zero_nq_indices] = embeddings
 
             commitment_loss_out = commitment_loss_out.sum(dim=0)
-        else:
-            print('rvq infer')
-            quantized_out = quantized_stack.sum(dim=0)
-            commitment_loss_out = commitment_loss_stack.sum(dim=0)
 
         if self.output_proj is not None:
             quantized_out = self.output_proj(quantized_out)
 
-        return quantized_out, commitment_loss_out.mean()
+        return quantized_out, embed_ind_out, commitment_loss_out.mean()
 
 
 class MeomeoSplitResidualVectorQuantizer(MimiSplitResidualVectorQuantizer):
@@ -484,11 +452,12 @@ class MeomeoSplitResidualVectorQuantizer(MimiSplitResidualVectorQuantizer):
             quantized_out += self.acoustic_residual_vector_quantizer.decode(codes[:, self.num_semantic_quantizers :])
         return quantized_out
 
-    def forward(self, embeddings: torch.Tensor):
-        semantic_out, semantic_commitment_loss = self.semantic_residual_vector_quantizer(embeddings)
-        acoustic_out, acoustic_commitment_loss = self.acoustic_residual_vector_quantizer(embeddings)
+    def forward(self, embeddings: torch.Tensor, semantic_nq: int, acoustic_nq: int):
+        semantic_out, semantic_codes, semantic_commitment_loss = self.semantic_residual_vector_quantizer(embeddings, semantic_nq)
+        acoustic_out, acoustic_codes, acoustic_commitment_loss = self.acoustic_residual_vector_quantizer(embeddings, acoustic_nq)
         quantized_out = semantic_out + acoustic_out
-        return quantized_out, semantic_out, semantic_commitment_loss, acoustic_commitment_loss
+        codes = torch.cat([semantic_codes, acoustic_codes], dim=0)
+        return quantized_out, semantic_out, codes, semantic_commitment_loss, acoustic_commitment_loss
 
 
 
@@ -508,34 +477,13 @@ class MeomeoModel(MimiModel):
         self,
         input_values: torch.Tensor,
         padding_mask: Optional[torch.Tensor] = None,
-        num_quantizers: Optional[int] = None,
-        audio_codes: Optional[torch.Tensor] = None,
+        semantic_nq: Optional[int] = None,
+        acoustic_nq: Optional[int] = None,
         encoder_past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         decoder_past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         return_dict: Optional[bool] = None,
     ):
-        r"""
-        Returns:
-
-        Examples:
-
-        ```python
-        >>> from datasets import load_dataset
-        >>> from transformers import AutoFeatureExtractor, MimiModel
-
-        >>> dataset = load_dataset("hf-internal-testing/ashraq-esc50-1-dog-example")
-        >>> audio_sample = dataset["train"]["audio"][0]["array"]
-
-        >>> model_id = "kyutai/mimi"
-        >>> model = MimiModel.from_pretrained(model_id)
-        >>> feature_extractor = AutoFeatureExtractor.from_pretrained(model_id)
-
-        >>> inputs = feature_extractor(raw_audio=audio_sample, return_tensors="pt")
-
-        >>> outputs = model(**inputs)
-        >>> audio_codes = outputs.audio_codes
-        >>> audio_values = outputs.audio_values
-        ```"""
+       
         return_dict = return_dict if return_dict is not None else self.config.return_dict
 
         if padding_mask is None:
@@ -557,7 +505,8 @@ class MeomeoModel(MimiModel):
         embeddings = encoder_outputs[0].transpose(1, 2)
         embeddings = self.downsample(embeddings)
 
-        embeddings, semantic_tokens, semantic_commitment_loss, acoustic_commitment_loss = self.quantizer(embeddings)
+        embeddings, semantic_tokens, codes, semantic_commitment_loss, acoustic_commitment_loss = self.quantizer(embeddings, semantic_nq, acoustic_nq)
+        codes = codes.transpose(0, 1)
 
 
         embeddings = self.upsample(embeddings)
@@ -585,6 +534,7 @@ class MeomeoModel(MimiModel):
         return MeomeoOutput(
             audio_values=audio_values,
             semantic_tokens=semantic_tokens,
+            audio_codes=codes,
             semantic_commitment_loss=semantic_commitment_loss,
             acoustic_commitment_loss=acoustic_commitment_loss,
             encoder_past_key_values=encoder_past_key_values,
@@ -637,34 +587,3 @@ class MeomeoModel(MimiModel):
         model.load_state_dict(state_dict, strict=False)
 
         return model
-
-
-    # @classmethod
-    # def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
-    #     # Get the config from pretrained model
-    #     config = kwargs.pop("config", None)
-    #     if config is None:
-    #         config = MeomeoConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
-
-    #     # Instantiate the model with the config
-    #     model = cls(config, *model_args, **kwargs)
-
-    #     # Check for state_dict
-    #     state_dict = kwargs.pop("state_dict", None)
-
-    #     # If no state_dict is provided, attempt to resolve it
-    #     if state_dict is None:
-    #         try:
-    #             # First, try to load safetensors weights
-    #             resolved_weights_file = cached_file(pretrained_model_name_or_path, SAFE_WEIGHTS_NAME)
-    #             state_dict = safetensors.torch.load_file(resolved_weights_file, device="cpu")
-    #         except (OSError, safetensors.torch.SafeTensorError):
-    #             # Fall back to pytorch_model.bin if safetensors are not available
-    #             resolved_weights_file = cached_file(pretrained_model_name_or_path, WEIGHTS_NAME)
-    #             state_dict = torch.load(resolved_weights_file, map_location="cpu")
-
-    #     # Load weights (adapt for any custom layers, if needed)
-    #     model.load_state_dict(state_dict, strict=False)
-
-    #     return model
-    
