@@ -556,9 +556,10 @@ class MeomeoModel(MimiModel):
 
         embeddings, semantic_tokens, semantic_commitment_loss, acoustic_commitment_loss = self.quantizer(embeddings)
 
-        semantic_tokens = self.semantic_token_projector(semantic_tokens)
 
         embeddings = self.upsample(embeddings)
+        semantic_tokens = self.upsample(semantic_tokens)
+        semantic_tokens = self.semantic_token_projector(semantic_tokens)
         decoder_outputs = self.decoder_transformer(
             embeddings.transpose(1, 2), past_key_values=decoder_past_key_values, return_dict=return_dict
         )
