@@ -7,7 +7,7 @@ from transformers.cache_utils import Cache, DynamicCache, SlidingWindowCache, St
 from transformers import MimiModel, MimiConfig
 from transformers.models.mimi.modeling_mimi import MimiSplitResidualVectorQuantizer, MimiOutput, MimiEncoderOutput, MimiModel, MimiResidualVectorQuantizer, MimiDecoderOutput, MimiEuclideanCodebook, MimiVectorQuantization
 from torch import nn
-from transformers import PreTrainedModel
+from transformers import PreTrainedModel, PretrainedConfig
 from transformers.utils import cached_file, WEIGHTS_NAME, SAFE_WEIGHTS_NAME
 import safetensors.torch
 from einops import rearrange, repeat
