@@ -34,6 +34,18 @@ class MeomeoConfig(MimiConfig):
         self.semantic_quantization_skipping_rate = semantic_quantization_skipping_rate
         self.semantic_min_nq = semantic_min_nq
 
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+        config_dict, _ = PretrainedConfig.get_config_dict(pretrained_model_name_or_path, **kwargs)
+
+        return cls(
+            acoustic_quantization_skipping_rate=config_dict.get("acoustic_quantization_skipping_rate", 0.1),
+            acoustic_min_nq=config_dict.get("acoustic_min_nq", 1),
+            semantic_quantization_skipping_rate=config_dict.get("semantic_quantization_skipping_rate", 0.2),
+            semantic_min_nq=config_dict.get("semantic_min_nq", 2),
+            **config_dict
+        )
+
 @dataclass
 class MeomeoOutput(MimiOutput):
     """
