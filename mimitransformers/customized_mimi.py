@@ -421,6 +421,9 @@ class MeomeoResidualVectorQuantizer(MimiResidualVectorQuantizer):
             quantized_out = quantized_stack.sum(dim=0)
             commitment_loss_out = commitment_loss_stack.sum(dim=0)
 
+        if self.output_proj is not None:
+            quantized_out = self.output_proj(quantized_out)
+
         return quantized_out, commitment_loss_out.mean()
 
 

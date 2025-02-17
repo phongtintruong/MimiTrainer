@@ -1,5 +1,5 @@
 {   
-    "num_quantizers": 8,
+    "num_quantizers": 9,
 
     "find_unused_parameters": false,
 
