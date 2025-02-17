@@ -1,14 +1,20 @@
 {   
+    "num_quantizers": 8,
+
     "find_unused_parameters": false,
 
-    "quantization_rate": 0.5,
+    "codebook_decay": 0.99,
+    "kmeans_init": true,
+    "kmeans_iters": 50,
+    "threshold_ema_dead_code": 2,
 
-    "acoustic_max_nq": 32,
-    "acoustic_min_nq": 2,
-    "acoustic_quantization_dropout": true,
+    "hidden_prj_size": 512,
+    "output_prj_size": 768,
 
-    "semantic_quantization_dropout": false,
-    "semantic_max_nq": 1,
+    "acoustic_quantization_skipping_rate": 0,
+    "acoustic_min_nq": 8,
+
+    "semantic_quantization_skipping_rate": 0,
     "semantic_min_nq": 1,
 
     "teacher_model_path": "nguyenvulebinh/wav2vec2-base-vi",

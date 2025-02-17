@@ -1,4 +1,14 @@
 import requests
+# from dotenv import load_dotenv
+import os
+from huggingface_hub import login
+
+
+# load_dotenv()
+
+# hf_token = os.getenv("HF_TOKEN_READ")
+# print(hf_token)
+login('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')
 
 # Dataset repository on Hugging Face
 repo_name = "linhtran92/viet_bud500"
@@ -32,7 +42,8 @@ if response.status_code == 200:
         elif rfilename.startswith('data/validation'):
             # Construct the URL for the validation files
             validation_files.append(f"https://huggingface.co/datasets/{repo_name}/resolve/main/{rfilename}")
-
+    
+    print('test')
     # Function to save the list of URLs to a file
     def save_to_file(filename, data_list):
         with open(filename, 'w') as file:
@@ -40,9 +51,9 @@ if response.status_code == 200:
                 file.write(f"{item}\n")
 
     # Save the URLs to separate files
-    save_to_file('/home/ws2080ti/Documents/project/MimiTrainer/audio/vietbud500_train_files.txt', train_files)
-    save_to_file('/home/ws2080ti/Documents/project/MimiTrainer/audio/vietbud500_test_files.txt', test_files)
-    save_to_file('/home/ws2080ti/Documents/project/MimiTrainer/audio/vietbud500_validation_files.txt', validation_files)
+    save_to_file('audio/vietbud500_train_files.txt', train_files)
+    save_to_file('audio/vietbud500_test_files.txt', test_files)
+    save_to_file('audio/vietbud500_validation_files.txt', validation_files)
 
     print("Files saved successfully.")
 
