@@ -171,7 +171,7 @@ class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
     """Codebook with Euclidean distance."""
 
     def __init__(self, config: MeomeoConfig, epsilon: float = 1e-5):
-        super().__init__()
+        super().__init__(config)
         self.codebook_decay = config.codebook_decay
         self.codebook_size = config.codebook_size
         self.codebook_dim = config.codebook_dim
