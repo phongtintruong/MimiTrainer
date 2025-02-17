@@ -562,6 +562,7 @@ class MeomeoModel(MimiModel):
 
         embeddings = self.upsample(embeddings)
         semantic_tokens = self.upsample(semantic_tokens)
+        semantic_tokens = semantic_tokens.transpose(1, 2)
         semantic_tokens = self.semantic_token_projector(semantic_tokens)
         decoder_outputs = self.decoder_transformer(
             embeddings.transpose(1, 2), past_key_values=decoder_past_key_values, return_dict=return_dict
