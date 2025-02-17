@@ -180,14 +180,14 @@ class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
         self.threshold_ema_dead_code = config.threshold_ema_dead_code
         init_fn: tp.Union[tp.Callable[..., torch.Tensor], tp.Any] = uniform_init if not self.kmeans_init else torch.zeros
 
-        embed = init_fn(self.codebook_size, self.codebook_dim)
+        emb = init_fn(self.codebook_size, self.codebook_dim)
 
         # self.codebook_size = config.codebook_size
 
         self.register_buffer("inited", torch.Tensor([not self.kmeans_init]))
         self.register_buffer("cluster_size", torch.zeros(self.codebook_size))
-        self.register_buffer("embed", embed)
-        self.register_buffer("embed_avg", embed.clone())
+        self.register_buffer("emb", emb)
+        self.register_buffer("embed_avg", emb.clone())
         self.epsilon = epsilon
 
     @torch.jit.ignore
@@ -195,9 +195,9 @@ class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
         if self.inited:
             return
 
-        embed, cluster_size = kmeans(data, self.codebook_size, self.kmeans_iters)
-        self.embed.data.copy_(embed)
-        self.embed_avg.data.copy_(embed.clone())
+        emb, cluster_size = kmeans(data, self.codebook_size, self.kmeans_iters)
+        self.emb.data.copy_(emb)
+        self.embed_avg.data.copy_(emb.clone())
         self.cluster_size.data.copy_(cluster_size)
         self.inited.data.copy_(torch.Tensor([True]))
         # Make sure all buffers across workers are in sync after initialization
@@ -205,9 +205,9 @@ class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
 
     def replace_(self, samples, mask):
         modified_codebook = torch.where(
-            mask[..., None], sample_vectors(samples, self.codebook_size), self.embed
+            mask[..., None], sample_vectors(samples, self.codebook_size), self.emb
         )
-        self.embed.data.copy_(modified_codebook)
+        self.emb.data.copy_(modified_codebook)
 
     def expire_codes_(self, batch_samples):
         if self.threshold_ema_dead_code == 0:
@@ -228,11 +228,11 @@ class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
     #     return self._embed
 
     def quantize(self, x):
-        embed = self.embed.t()
+        emb = self.emb.t()
         dist = -(
             x.pow(2).sum(1, keepdim=True)
-            - 2 * x @ embed
-            + embed.pow(2).sum(0, keepdim=True)
+            - 2 * x @ emb
+            + emb.pow(2).sum(0, keepdim=True)
         )
         embed_ind = dist.max(dim=-1).indices
         return embed_ind
@@ -250,7 +250,7 @@ class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
 
     # Copied from transformers.models.encodec.modeling_encodec.EncodecEuclideanCodebook.decode
     def decode(self, embed_ind):
-        quantize = F.embedding(embed_ind, self.embed)
+        quantize = F.embedding(embed_ind, self.emb)
         return quantize
 
     def forward(self, x):
@@ -274,7 +274,7 @@ class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
                 * self.cluster_size.sum()
             )
             embed_normalized = self.embed_avg / cluster_size.unsqueeze(1)
-            self.embed.data.copy_(embed_normalized)
+            self.emb.data.copy_(embed_normalized)
 
         return quantize, embed_ind
     
@@ -615,7 +615,7 @@ class MeomeoModel(MimiModel):
             print("Converting MimiModel state_dict to MeomeoModel format...")
 
             # Convert MimiModel's state dict to MeomeoModel's format
-            state_dict["embed"] = state_dict["embed_sum"] / state_dict["cluster_usage"].clamp(min=1e-5)[:, None]
+            state_dict["emb"] = state_dict["embed_sum"] / state_dict["cluster_usage"].clamp(min=1e-5)[:, None]
 
             # Convert "cluster_usage" → "cluster_size" (assuming same purpose)
             state_dict["cluster_size"] = state_dict["cluster_usage"].clone()
