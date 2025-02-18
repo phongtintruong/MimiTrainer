@@ -17,7 +17,7 @@ if __name__ == '__main__':
     # ✅ Add argument parser
     parser = argparse.ArgumentParser(description="Train mHuBERT with pre-trained discriminators.")
     parser.add_argument("--config_path", type=str, required=True, help="Path to the config JSON file.")
-    parser.add_argument("--hf_token", type=str, default=os.getenv("HF_TOKEN"), help="Hugging Face API token.")
+    parser.add_argument("--hf_token", type=str, default=os.getenv("HF_TOKEN_WRITE"), help="Hugging Face API token.")
     parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to the checkpoint file.")
     args = parser.parse_args()
 
@@ -38,7 +38,7 @@ if __name__ == '__main__':
     login(hf_token)
 
     # Load generator model & feature extractor
-    generator_config = MeomeoConfig.from_pretrained("config/meomeo_cfg.json")
+    generator_config = MeomeoConfig.from_pretrained("config_file")
     generator = MeomeoModel.from_pretrained("kyutai/mimi", config=generator_config)
     feature_extractor = AutoFeatureExtractor.from_pretrained("kyutai/mimi")
 
