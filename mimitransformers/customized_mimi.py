@@ -152,6 +152,7 @@ class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
     @torch.jit.ignore
     def init_embed_(self, data):
         if self.inited:
+            # print('inited true')
             return
 
         emb, cluster_size = kmeans(data, self.codebook_size, self.kmeans_iters)
@@ -215,6 +216,9 @@ class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
     def forward(self, x):
         shape, dtype = x.shape, x.dtype
         x = x.reshape((-1, shape[-1]))
+
+        # print("Codebook Weights Loaded:", self.emb.mean().item())
+        # print("Inited Status:", self.inited.item())
 
         self.init_embed_(x)
 
@@ -351,6 +355,7 @@ class MeomeoResidualVectorQuantizer(MimiResidualVectorQuantizer):
         nq_tmp = nq if nq != None else self.max_num_quantizers
         
         for layer in self.layers[:nq_tmp]:
+            # print('count')
             quantized, embed_ind, commitment_loss = layer(residual)
             residual = residual - quantized
             quantized_list.append(quantized)
@@ -364,7 +369,8 @@ class MeomeoResidualVectorQuantizer(MimiResidualVectorQuantizer):
         if nq != None or self.min_num_quantizers == None:
             assert nq <= self.max_num_quantizers, f'nq cant be bigger than {self.max_num_quantizers}'
 
-            print('rvq infer')
+            # print('rvq infer')
+            # print(quantized_stack.shape)
             quantized_out = quantized_stack.sum(dim=0)
             commitment_loss_out = commitment_loss_stack.sum(dim=0)
             embed_ind_out = embed_ind_stack
@@ -553,37 +559,38 @@ class MeomeoModel(MimiModel):
 
         # Check for state_dict
         state_dict = kwargs.pop("state_dict", None)
-
-        # If no state_dict is provided, attempt to resolve it
         if state_dict is None:
             try:
-                # First, try to load safetensors weights
                 resolved_weights_file = cached_file(pretrained_model_name_or_path, SAFE_WEIGHTS_NAME)
                 state_dict = safetensors.torch.load_file(resolved_weights_file, device="cpu")
             except (OSError, safetensors.torch.SafeTensorError):
-                # Fall back to pytorch_model.bin if safetensors are not available
                 resolved_weights_file = cached_file(pretrained_model_name_or_path, WEIGHTS_NAME)
                 state_dict = torch.load(resolved_weights_file, map_location="cpu")
 
-        # Check if the state_dict comes from MimiModel (presence of "embed_sum" and "cluster_usage")
-        if "embed_sum" in state_dict and "cluster_usage" in state_dict:
-            print("Converting MimiModel state_dict to MeomeoModel format...")
+        # Convert pretrained codebook keys to Meomeo format
+        updated_state_dict = {}
+        for key, value in state_dict.items():
+            if "codebook" in key:
+                new_key = key.replace("cluster_usage", "cluster_size")
+                new_key = new_key.replace("embed_sum", "emb")
+                new_key = new_key.replace("initialized", "inited")
+                
+                # Compute embed_avg from embed_sum and cluster_usage if needed
+                if "emb" in new_key:
+                    cluster_key = key.replace("embed_sum", "cluster_usage")
+                    if cluster_key in state_dict:
+                        cluster_usage = state_dict[cluster_key].clamp(min=1e-5)
+                        value = value / cluster_usage[:, None]  # Normalize emb
+                    else:
+                        print(f"Warning: Missing {cluster_key} when computing embed_avg")
+                
+                updated_state_dict[new_key] = value
+            else:
+                updated_state_dict[key] = value
 
-            # Convert MimiModel's state dict to MeomeoModel's format
-            state_dict["emb"] = state_dict["embed_sum"] / state_dict["cluster_usage"].clamp(min=1e-5)[:, None]
-
-            # Convert "cluster_usage" → "cluster_size" (assuming same purpose)
-            state_dict["cluster_size"] = state_dict["cluster_usage"].clone()
-
-            # Ensure "inited" is properly set
-            state_dict["inited"] = torch.tensor(True, dtype=torch.bool)
-
-            # Remove Mimi-specific buffers that don't exist in Meomeo
-            del state_dict["embed_sum"]
-            del state_dict["cluster_usage"]
-            del state_dict["initialized"]  # Mimi uses "initialized", Meomeo uses "inited"
-
-        # Load weights (adapt for any custom layers, if needed)
-        model.load_state_dict(state_dict, strict=False)
+        # Load the updated state_dict
+        missing_keys, unexpected_keys = model.load_state_dict(updated_state_dict, strict=False)
+        # print("Missing keys:", missing_keys)
+        # print("Unexpected keys:", unexpected_keys)
 
         return model

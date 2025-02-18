@@ -1,5 +1,5 @@
 {   
-    "num_quantizers": 9,
+    "num_quantizers": 32,
 
     "find_unused_parameters": false,
 
@@ -11,8 +11,8 @@
     "hidden_prj_size": 512,
     "output_prj_size": 768,
 
-    "acoustic_quantization_skipping_rate": 0,
-    "acoustic_min_nq": 8,
+    "acoustic_quantization_skipping_rate": 0.5,
+    "acoustic_min_nq": 1,
 
     "semantic_quantization_skipping_rate": 0,
     "semantic_min_nq": 1,
@@ -38,8 +38,8 @@
     "distill_loss_lambda": 1,
     "feature_loss_lambda": 4,
     "adversarial_loss_lambda": 4,
-    "semantic_commitment_loss_lambda": null,
-    "acoustic_commitment_loss_lambda": null,
+    "semantic_commitment_loss_lambda": 1,
+    "acoustic_commitment_loss_lambda": 1,
     "distill_type": "d_axis_mimi",
 
     "train_audio_path": "parquet",
