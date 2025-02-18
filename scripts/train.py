@@ -35,12 +35,15 @@ if __name__ == '__main__':
 
     # Login to Hugging Face Hub
     # hf_token = os.getenv("HF_TOKEN")
+    print(hf_token)
     login(hf_token)
 
     # Load generator model & feature extractor
-    generator_config = MeomeoConfig.from_pretrained("config_file")
+    generator_config = MeomeoConfig.from_pretrained(config_file)
     generator = MeomeoModel.from_pretrained("kyutai/mimi", config=generator_config)
     feature_extractor = AutoFeatureExtractor.from_pretrained("kyutai/mimi")
+
+    print('meomeoloaded')
 
     # Load teacher model
     processor = AutoFeatureExtractor.from_pretrained(config["teacher_feature_extractor"])

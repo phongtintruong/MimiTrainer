@@ -277,6 +277,8 @@ class MeomeoVectorQuantization(MimiVectorQuantization):
 
 
         quantize = quantize.permute(0, 2, 1)
+        # print('quantize shape', quantize.shape)
+        # print('embed_ind shape', embed_ind.shape)
         return quantize, embed_ind, loss
 
 
@@ -367,7 +369,8 @@ class MeomeoResidualVectorQuantizer(MimiResidualVectorQuantizer):
         commitment_loss_stack = torch.stack(commitment_loss_list, dim=0)
         batch_size = quantized_stack.shape[1]
         if nq != None or self.min_num_quantizers == None:
-            assert nq <= self.max_num_quantizers, f'nq cant be bigger than {self.max_num_quantizers}'
+            if nq != None:
+                assert nq <= self.max_num_quantizers, f'nq cant be bigger than {self.max_num_quantizers}'
 
             # print('rvq infer')
             # print(quantized_stack.shape)
@@ -376,22 +379,38 @@ class MeomeoResidualVectorQuantizer(MimiResidualVectorQuantizer):
             embed_ind_out = embed_ind_stack
 
         else:
+            assert self.min_num_quantizers < self.max_num_quantizers, f'min_nq has to be smaller than {self.max_num_quantizers}'
             nq_values = torch.randint(low=self.min_num_quantizers, high=self.max_num_quantizers + 1, size=(batch_size,))
             num_zero_nqs = int(batch_size * self.quantization_skipping_rate)
+            if batch_size == 1:
+                num_zero_nqs = 1 if torch.rand(1).item() < self.quantization_skipping_rate else 0
             zero_nq_indices = torch.randperm(batch_size)[:num_zero_nqs]
             nq_values[zero_nq_indices] = 0
 
             quantizer_indices = torch.arange(self.max_num_quantizers).unsqueeze(1)
             mask = quantizer_indices < nq_values.unsqueeze(0)
-            quantized_mask = mask.unsqueeze(-1).unsqueeze(-1)
-            commitment_loss_mask = mask.unsqueeze(-1)
+            quantized_mask = mask.unsqueeze(-1).unsqueeze(-1).to(quantized_stack.device)
+            commitment_loss_mask = mask.to(commitment_loss_stack.device)
+            embed_ind_mask = mask.unsqueeze(-1).to(embed_ind_stack)
+
+            # print('quantized_stack shape', quantized_stack.shape)
+            # print('commitment_loss_stack shape', commitment_loss_stack.shape)
+            # print('embed_ind_stack shape', embed_ind_stack.shape)
+            # print('quantized_mask shape', quantized_mask.shape)
+            # print('commitment_loss_mask shape', commitment_loss_mask.shape)
+            # print('embed_ind_mask shape', embed_ind_mask.shape)
 
             quantized_out = quantized_stack * quantized_mask
             commitment_loss_out = commitment_loss_stack * commitment_loss_mask
-            embed_ind_out = embed_ind_stack * commitment_loss_mask
+            embed_ind_out = embed_ind_stack * embed_ind_mask
 
             quantized_out = quantized_out.sum(dim=0)
-            quantized_out[zero_nq_indices] = embeddings
+            # print('quantized_out', quantized_out)
+            # print('quantized_out shape', quantized_out.shape)
+            # print('zero_id', zero_nq_indices)
+            # print('embeddings', embeddings)
+            # print('embeddings shape', embeddings.shape)
+            quantized_out[zero_nq_indices] = embeddings[zero_nq_indices]
 
             commitment_loss_out = commitment_loss_out.sum(dim=0)
 
@@ -514,9 +533,8 @@ class MeomeoModel(MimiModel):
         embeddings, semantic_tokens, codes, semantic_commitment_loss, acoustic_commitment_loss = self.quantizer(embeddings, semantic_nq, acoustic_nq)
         codes = codes.transpose(0, 1)
 
-
         embeddings = self.upsample(embeddings)
-        semantic_tokens = self.upsample(semantic_tokens)
+        # semantic_tokens = self.upsample(semantic_tokens)
         semantic_tokens = semantic_tokens.transpose(1, 2)
         semantic_tokens = self.semantic_token_projector(semantic_tokens)
         decoder_outputs = self.decoder_transformer(

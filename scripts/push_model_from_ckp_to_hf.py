@@ -35,16 +35,16 @@ def load_generator_only(path, generator):
 
     return generator
 
-hf_token = os.getenv("HF_TOKEN")
+hf_token = os.getenv("HF_TOKEN_WRITE")
 login(hf_token)
 
 torch.cuda.empty_cache()
 print('start')
 
 # Define the path to the checkpoint
-checkpoint_path = '/home/user04/NTTrung/MimiTrainer/Log/spt_base/MimiTrainer_00000200'
+checkpoint_path = '/home/user04/NTTrung/MimiTrainer/Log/spt_base/MimiTrainer_00000010'
 
-generator_config = MeomeoConfig.from_pretrained('/home/user04/NTTrung/MimiTrainer/config/meomeo_cfg.json')
+generator_config = MeomeoConfig.from_pretrained('/home/user04/NTTrung/MimiTrainer/config/rise_cfg.json')
 # Instantiate the generator model
 meomeo = MeomeoModel(config=generator_config)  # Replace with your generator class
 
@@ -55,7 +55,7 @@ meomeo = load_generator_only(path=checkpoint_path, generator=meomeo)
 meomeo.eval()
 
 meomeo.push_to_hub(
-    repo_id='phongtintruong/meomeo-rise-2131307',  # Name of the repository
+    repo_id='phongtintruong/meomeo-rise-2181755-10',  # Name of the repository
     use_temp_dir=True,                # Temporarily saves files before pushing
     commit_message="Initial commit",  # Optional commit message
 )
