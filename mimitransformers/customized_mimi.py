@@ -131,6 +131,8 @@ class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
 
     def __init__(self, config: MeomeoConfig, epsilon: float = 1e-5):
         super().__init__(config)
+        self.accum_steps = config.gen_gradient_accumulation_steps
+        self.accum_counter = 0
         self.codebook_decay = config.codebook_decay
         self.codebook_size = config.codebook_size
         self.codebook_dim = config.codebook_dim
@@ -148,6 +150,10 @@ class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
         self.register_buffer("emb", emb)
         self.register_buffer("embed_avg", emb.clone())
         self.epsilon = epsilon
+
+        self.accum_cluster_size = torch.zeros(self.codebook_size, device=self.emb.device).requires_grad_(False)
+        self.accum_embed_avg = torch.zeros_like(self.emb, device=self.emb.device).requires_grad_(False)
+        self.accum_samples = torch.empty(0, self.codebook_dim, device=self.emb.device).requires_grad_(False)
 
     @torch.jit.ignore
     def init_embed_(self, data):
@@ -174,6 +180,8 @@ class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
             return
 
         expired_codes = self.cluster_size < self.threshold_ema_dead_code
+        # print('number of expired codes:', torch.sum(expired_codes).item())
+        # print(expired_codes.numel())
         if not torch.any(expired_codes):
             return
 
@@ -228,16 +236,43 @@ class MeomeoEuclideanCodebook(MimiEuclideanCodebook):
         quantize = self.decode(embed_ind)
 
         if self.training:
-            self.expire_codes_(x)
-            ema_inplace(self.cluster_size, embed_onehot.sum(0), self.codebook_decay)
-            embed_sum = x.t() @ embed_onehot
-            ema_inplace(self.embed_avg, embed_sum.t(), self.codebook_decay)
-            cluster_size = (
-                laplace_smoothing(self.cluster_size, self.codebook_size, self.epsilon)
-                * self.cluster_size.sum()
-            )
-            embed_normalized = self.embed_avg / cluster_size.unsqueeze(1)
-            self.emb.data.copy_(embed_normalized)
+            # print('counter', self.accum_counter)
+            # print('accum step', self.accum_steps)
+            # print(self.emb.device)
+            # print(self.accum_cluster_size.device, embed_onehot.device)
+            self.accum_cluster_size = self.accum_cluster_size.to(self.emb.device)
+            self.accum_embed_avg = self.accum_embed_avg.to(self.emb.device)
+            self.accum_samples = self.accum_samples.to(self.emb.device)
+
+            self.accum_cluster_size += embed_onehot.sum(0).detach()
+            self.accum_embed_avg += (x.t() @ embed_onehot).t().detach()
+            # self.accum_samples.append(x.detach())
+            self.accum_samples = torch.cat([self.accum_samples, x.detach()], dim=0)
+            self.accum_counter += 1
+
+            if self.accum_counter == self.accum_steps:
+                # full_accumulated_samples = torch.cat(self.accum_samples, dim=0)
+                # self.expire_codes_(full_accumulated_samples)
+                self.expire_codes_(self.accum_samples)
+
+                ema_inplace(self.cluster_size, self.accum_cluster_size, self.codebook_decay)
+                ema_inplace(self.embed_avg, self.accum_embed_avg, self.codebook_decay)
+                cluster_size = (
+                    laplace_smoothing(self.cluster_size, self.codebook_size, self.epsilon)
+                    * self.cluster_size.sum()
+                )
+
+                embed_normalized = self.embed_avg / (cluster_size.unsqueeze(1) + self.epsilon)
+                self.emb.data.copy_(embed_normalized)
+
+                # self.accum_cluster_size.zero_()
+                # self.accum_embed_avg.zero_()
+                # self.accum_samples = []
+                # self.accum_counter = 0
+                self.accum_cluster_size.zero_()
+                self.accum_embed_avg.zero_()
+                self.accum_samples = torch.empty(0, self.codebook_dim, device=self.emb.device)
+                self.accum_counter = 0
 
         return quantize, embed_ind
     
@@ -299,7 +334,7 @@ class MeomeoResidualVectorQuantizer(MimiResidualVectorQuantizer):
         self.layers = nn.ModuleList(
             [
                 MeomeoVectorQuantization(config)
-                for _ in range(self.num_quantizers)
+                for _ in range(self.max_num_quantizers)
             ]
         )
         self.input_proj = None
@@ -585,6 +620,13 @@ class MeomeoModel(MimiModel):
                 resolved_weights_file = cached_file(pretrained_model_name_or_path, WEIGHTS_NAME)
                 state_dict = torch.load(resolved_weights_file, map_location="cpu")
 
+        # for key, value in state_dict.items():
+        #     if "cluster_usage" in key:
+        #         print(value)
+        #         print(type(value))
+        #         mask = value < 0.2
+        #         print(mask.numel())
+        #         print(torch.sum(mask).item())
         # Convert pretrained codebook keys to Meomeo format
         updated_state_dict = {}
         for key, value in state_dict.items():

@@ -108,6 +108,7 @@ class MimiTrainer(nn.Module):
         self.val_files = cfg.get("val_files", None)
         self.stream_train_data = cfg.get("stream_train_data", True)
         self.stream_val_data = cfg.get("stream_val_data", False)
+        self.tqdm_valid = cfg.get('tqdm_valid', False)
         self.train_est_len = cfg.get("train_est_len", None)
         self.val_est_len = cfg.get("val_est_len", None)
         self.ema_freq = cfg.get("ema_freq", 1)
@@ -490,7 +491,7 @@ class MimiTrainer(nn.Module):
         avg_feature_loss += loss_feature.item()
         avg_adversarial_loss += loss_adversarial.item()
         avg_recon_loss += loss_recon.item()
-        return loss_generator_all, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, 0, avg_recon_loss
+        return loss_generator_all, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, 0
     
     def get_generator_loss_without_recon(self, x, x_hat, feature, semantic_feature, discriminator_outputs, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss, gradient_accumulation_steps):
         loss_mel = sum(
@@ -514,7 +515,7 @@ class MimiTrainer(nn.Module):
         avg_feature_loss += loss_feature.item()
         avg_adversarial_loss += loss_adversarial.item()
         avg_mel_loss += loss_mel.item()
-        return loss_generator_all, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_mel_loss, 0
+        return loss_generator_all, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, 0, avg_mel_loss
     
     def get_generator_loss_without_mel_and_recon(self, x, x_hat, feature, semantic_feature, discriminator_outputs, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss, gradient_accumulation_steps):
         loss_feature = sum(feature_loss(*output[2:]) for output in discriminator_outputs) / gradient_accumulation_steps
@@ -597,7 +598,7 @@ class MimiTrainer(nn.Module):
         discriminators_steps = 0
         generator_steps = 0
 
-        batch_disc_steps = 0
+        pretrain_disc_steps = 0
         batch_gen_steps = 0
 
         if self.stream_train_data:
@@ -616,7 +617,7 @@ class MimiTrainer(nn.Module):
 
                 semantic_feature = get_teacher_semantic_token(inputs_teacher)
 
-                if epoch >= self.discriminators_warmup_epochs:
+                if epoch >= self.discriminators_warmup_epochs and (steps + 1) / self.gen_gradient_accumulation_steps > self.generator_start_late_steps:
                     for param in self.generator.parameters():
                             param.requires_grad = True
                     self.generator.train()
@@ -639,145 +640,160 @@ class MimiTrainer(nn.Module):
         
                     detach_discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
                     
-                    if (steps + 1) / self.gen_gradient_accumulation_steps > self.generator_start_late_steps:
-                        for disc in self.discriminators.values():
-                            for param in disc.parameters():
-                                param.requires_grad = False
-                            disc.eval()
-                        discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
-                        for disc in self.discriminators.values():
-                            for param in disc.parameters():
-                                param.requires_grad = True
-                            disc.train()
+                    for disc in self.discriminators.values():
+                        for param in disc.parameters():
+                            param.requires_grad = False
+                        disc.eval()
+                    discriminator_outputs = [disc(x, x_hat) for disc in self.discriminators.values()]
+                    for disc in self.discriminators.values():
+                        for param in disc.parameters():
+                            param.requires_grad = True
+                        disc.train()
 
-                        # discriminator_outputs = [tuple(tensor.detach() if isinstance(tensor, torch.Tensor) else tensor for tensor in disc(x, x_hat)) for disc in self.discriminators.values()]
+                    # discriminator_outputs = [tuple(tensor.detach() if isinstance(tensor, torch.Tensor) else tensor for tensor in disc(x, x_hat)) for disc in self.discriminators.values()]
 
-    # 
-                        # x_hat_detached = x_hat.detach().clone()
-                        # x_hat_clone = x_hat.clone()
+# 
+                    # x_hat_detached = x_hat.detach().clone()
+                    # x_hat_clone = x_hat.clone()
 
-                        # print("x_hat requires_grad:", x_hat.requires_grad)  # Should be True
+                    # print("x_hat requires_grad:", x_hat.requires_grad)  # Should be True
 
-                        loss_generator_all, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss = get_generator_loss(x, x_hat, feature, semantic_feature, discriminator_outputs, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss, self.gen_gradient_accumulation_steps)
-                        # print("Loss requires_grad:", loss_generator_all.requires_grad)  # Should be True
-                        # self.accelerator.backward(loss_generator_all)
-                        avg_semantic_commit_loss += semantic_commitment_loss
-                        avg_acoustic_commit_loss += acoustic_commitment_loss
-                        loss_generator_all = loss_generator_all + self.semantic_commitment_loss_lambda * semantic_commitment_loss + self.acoustic_commitment_loss_lambda * acoustic_commitment_loss
-                        loss_generator_all.backward()
-                        # if x_hat.grad is not None:
-                        #     print('x_hat has grad')
-                        # for name, disc in self.discriminators.items():
-                        #     for param in disc.parameters():
-                        #         if param.grad is not None:
-                        #             print(f"{name} discriminator parameter {param.shape} has gradients!")
-                        #             exit()
-                        if (steps + 1) % self.gen_gradient_accumulation_steps == 0 and self.is_main:
-                            self.update_model(self.generator, self.optim_g, self.scheduler_g, self.ema_g)
-                            batch_gen_steps += 1
-                            generator_steps += 1
-
-                            if not (generator_steps % self.gen_log_steps):
-                                loss_dict = {'Generator': avg_generator_loss, 'Distillation': avg_distill_loss, 'Feature': avg_feature_loss, 'Adversarial': avg_adversarial_loss, 'Reconstruction': avg_recon_loss, 'Mel': avg_mel_loss, 'Semantic Commit': avg_semantic_commit_loss, 'Acoustic Commit': avg_acoustic_commit_loss}
-                                self.log({
-                                    "train/generator loss": self.accelerator.gather(avg_generator_loss / (self.gen_log_steps)),
-                                    "train/feature loss": self.accelerator.gather(avg_feature_loss / (self.gen_log_steps)),
-                                    "train/adversarial loss": self.accelerator.gather(avg_adversarial_loss / (self.gen_log_steps)),
-                                    "train/distillation loss": self.accelerator.gather(avg_distill_loss / (self.gen_log_steps)),
-                                    "train/learning_rate": lr
-                                }, step=generator_steps)
-                                self.log_loss(self.accelerator, loss_dict, epoch, steps, 'Generator', generator_steps, self.gen_log_steps)
-                                avg_generator_loss = loss_dict['Generator']
-                                avg_distill_loss = loss_dict['Distillation']
-                                avg_feature_loss = loss_dict['Feature']
-                                avg_adversarial_loss = loss_dict['Adversarial']
-                                avg_recon_loss = loss_dict['Reconstruction']
-                                avg_mel_loss = loss_dict['Mel']
-                                avg_semantic_commit_loss = loss_dict['Semantic Commit']
-                                avg_acoustic_commit_loss = loss_dict['Acoustic Commit']
-
-                                self.print(
-                                    f"learning rate: {lr}; "
-                                    f"Time cost per step: {step_time_log['time_cost'] / self.gen_log_steps:0.3f}s"
-                                )
-                                step_time_log = {}
-
-                            if not (generator_steps % self.save_model_steps):
-                                self.print("Validation start ...")
-                                total_distill_loss = 0.0
-                                total_recon_loss = 0.0
-                                total_disc_loss = 0.0
-                                num = 0
-                                self.generator.eval()
-                                with torch.no_grad():
-                                    for i, batch in tqdm(enumerate(self.valid_dl)):
-                                        # print('validating')
-                                        x, inputs_teacher = batch
-                                        # with torch.no_grad():
-                                        semantic_feature = get_teacher_semantic_token(inputs_teacher)
-
-                                        model_outs = self.generator(input_values=x, semantic_nq=1, acoustic_nq=7)
-                                        x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
-                                        # print('generator output')
-
-                                        discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
-                                        loss_disc_all = sum(discriminator_loss(*output[:2]) for output in discriminator_outputs) 
-
-                                        distill_loss = self.distill_loss(feature, semantic_feature).item()
-                                        loss_recon = recon_loss(x, x_hat).item()
-
-                                        total_distill_loss += distill_loss
-                                        total_recon_loss += loss_recon
-                                        total_disc_loss += loss_disc_all
-                                        num += 1
-                                        
-                                    self.print(
-                                        f'{generator_steps}: dev recon loss: {total_recon_loss / num}\tdev disc loss: {total_disc_loss / num}\tdev distill loss: {total_distill_loss / num}')
-                                    self.log(
-                                        {'dev/recon loss': total_recon_loss / num, 'dev/distillation loss': total_distill_loss / num},
-                                        step=generator_steps)
-
-                                    # save model
-                                    model_path = str(self.results_folder / f'MimiTrainer_{generator_steps:08d}')
-                                    self.save(model_path, (total_distill_loss / num) + (total_recon_loss / num) * 2)
-                                    self.print(f'{generator_steps}: saving model to {str(self.results_folder)}')
-                                    # self.generator.train()
-                                    print('back to train')
-
-                            if batch_gen_steps >= drop_last_point:
-                                self.steps += 1
-                                steps = int(self.steps.item())
-                                # Learning rate update
-                                lr = self.scheduler_g.get_last_lr()[0]
-
-                                step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
-                                batch_gen_steps = 0
-                                break
-
-                    loss_disc_all = sum(discriminator_loss(*output[:2]) for output in detach_discriminator_outputs) / self.disc_gradient_accumulation_steps
-                    avg_disc_loss += loss_disc_all.item()
-                    loss_disc_all.backward()
+                    loss_generator_all, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss = get_generator_loss(x, x_hat, feature, semantic_feature, discriminator_outputs, avg_generator_loss, avg_distill_loss, avg_feature_loss, avg_adversarial_loss, avg_recon_loss, avg_mel_loss, self.gen_gradient_accumulation_steps)
+                    # print("Loss requires_grad:", loss_generator_all.requires_grad)  # Should be True
+                    # self.accelerator.backward(loss_generator_all)
+                    avg_semantic_commit_loss += semantic_commitment_loss
+                    avg_acoustic_commit_loss += acoustic_commitment_loss
+                    loss_generator_all = loss_generator_all + self.semantic_commitment_loss_lambda * semantic_commitment_loss + self.acoustic_commitment_loss_lambda * acoustic_commitment_loss
+                    loss_generator_all.backward()
                     # if x_hat.grad is not None:
                     #     print('x_hat has grad')
-                    # found = False
                     # for name, disc in self.discriminators.items():
                     #     for param in disc.parameters():
                     #         if param.grad is not None:
                     #             print(f"{name} discriminator parameter {param.shape} has gradients!")
-                    #             found = True
-                    #             break
-                    #     if found:
-                    #         break
-                    if (steps + 1) % self.disc_gradient_accumulation_steps == 0 and self.is_main:
-                        self.update_model(self.discriminators, self.optim_d, self.scheduler_d, self.ema_ds)
-                        discriminators_steps += 1
+                    #             exit()
+                    if (steps + 1) % self.gen_gradient_accumulation_steps == 0 and self.is_main:
+                        batch_gen_steps += 1
+                        generator_steps += 1
+                        if not (generator_steps % self.ema_freq):
+                            self.update_model(self.generator, self.optim_g, self.scheduler_g, self.ema_g)
+                        else:
+                            self.update_model(self.generator, self.optim_g, self.scheduler_g)
+                            
+                        if not (generator_steps % self.gen_log_steps):
+                            loss_dict = {'Generator': avg_generator_loss, 'Distillation': avg_distill_loss, 'Feature': avg_feature_loss, 'Adversarial': avg_adversarial_loss, 'Reconstruction': avg_recon_loss, 'Mel': avg_mel_loss, 'Semantic Commit': avg_semantic_commit_loss, 'Acoustic Commit': avg_acoustic_commit_loss}
+                            self.log({
+                                "train/generator loss": self.accelerator.gather(avg_generator_loss / (self.gen_log_steps)),
+                                "train/feature loss": self.accelerator.gather(avg_feature_loss / (self.gen_log_steps)),
+                                "train/adversarial loss": self.accelerator.gather(avg_adversarial_loss / (self.gen_log_steps)),
+                                "train/distillation loss": self.accelerator.gather(avg_distill_loss / (self.gen_log_steps)),
+                                "train/learning_rate": lr
+                            }, step=generator_steps)
+                            self.log_loss(self.accelerator, loss_dict, epoch, steps, 'Generator', generator_steps, self.gen_log_steps)
+                            avg_generator_loss = loss_dict['Generator']
+                            avg_distill_loss = loss_dict['Distillation']
+                            avg_feature_loss = loss_dict['Feature']
+                            avg_adversarial_loss = loss_dict['Adversarial']
+                            avg_recon_loss = loss_dict['Reconstruction']
+                            avg_mel_loss = loss_dict['Mel']
+                            avg_semantic_commit_loss = loss_dict['Semantic Commit']
+                            avg_acoustic_commit_loss = loss_dict['Acoustic Commit']
 
-                        if not ((discriminators_steps - self.generator_start_late_steps) % self.disc_log_steps) or discriminators_steps <= self.generator_start_late_steps:
+                            self.print(
+                                f"learning rate: {lr}; "
+                                f"Time cost per step: {step_time_log['time_cost'] / self.gen_log_steps:0.3f}s"
+                            )
+                            step_time_log = {}
+
+                        if not (generator_steps % self.save_model_steps):
+                            self.print("Validation start ...")
+                            total_distill_loss = 0.0
+                            total_recon_loss = 0.0
+                            total_disc_loss = 0.0
+                            num = 0
+                            self.generator.eval()
+                            for disc in self.discriminators.values():
+                                for param in disc.parameters():
+                                    param.requires_grad = False
+                                disc.eval()
+                            with torch.no_grad():
+                                iterator = tqdm(enumerate(self.valid_dl)) if self.tqdm_valid else enumerate(self.valid_dl)
+                                for i, batch in iterator:
+                                    # print('validating')
+                                    x, inputs_teacher = batch
+                                    # with torch.no_grad():
+                                    semantic_feature = get_teacher_semantic_token(inputs_teacher)
+
+                                    model_outs = self.generator(input_values=x, semantic_nq=1, acoustic_nq=7)
+                                    x_hat, feature = model_outs.audio_values, model_outs.semantic_tokens
+                                    # print('generator output')
+
+                                    discriminator_outputs = [disc(x, x_hat.detach()) for disc in self.discriminators.values()]
+                                    loss_disc_all = sum(discriminator_loss(*output[:2]) for output in discriminator_outputs) 
+
+                                    distill_loss = self.distill_loss(feature, semantic_feature).item()
+                                    loss_recon = recon_loss(x, x_hat).item()
+
+                                    total_distill_loss += distill_loss
+                                    total_recon_loss += loss_recon
+                                    total_disc_loss += loss_disc_all
+                                    num += 1
+                                    
+                                self.print(
+                                    f'{generator_steps}: dev recon loss: {total_recon_loss / num}\tdev disc loss: {total_disc_loss / num}\tdev distill loss: {total_distill_loss / num}')
+                                self.log(
+                                    {'dev/recon loss': total_recon_loss / num, 'dev/distillation loss': total_distill_loss / num},
+                                    step=generator_steps)
+
+                                # save model
+                                model_path = str(self.results_folder / f'MimiTrainer_{generator_steps:08d}')
+                                self.save(model_path, (total_distill_loss / num) + (total_recon_loss / num) * 2)
+                                self.print(f'{generator_steps}: saving model to {str(self.results_folder)}')
+                                # self.generator.train()
+                                print('back to train')
+
+                        # if batch_gen_steps >= drop_last_point:
+                        #     self.steps += 1
+                        #     steps = int(self.steps.item())
+                        #     # Learning rate update
+                        #     lr = self.scheduler_g.get_last_lr()[0]
+
+                        #     step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
+                        #     batch_gen_steps = 0
+                        #     break
+                    
+                    for disc in self.discriminators.values():
+                        for param in disc.parameters():
+                            param.requires_grad = True
+                        disc.train()
+                    loss_disc_all = sum(discriminator_loss(*output[:2]) for output in detach_discriminator_outputs) / self.disc_gradient_accumulation_steps
+                    avg_disc_loss += loss_disc_all.item()
+                    loss_disc_all.backward()
+                    
+                    if (steps + 1) % self.disc_gradient_accumulation_steps == 0 and self.is_main:
+                        discriminators_steps += 1
+                        if not (discriminators_steps % self.ema_freq):
+                            self.update_model(self.discriminators, self.optim_d, self.scheduler_d, self.ema_ds)
+                        else:
+                            self.update_model(self.discriminators, self.optim_d, self.scheduler_d)
+
+                        if not (discriminators_steps % self.disc_log_steps):
                             # print('Epoch', epoch, 'Step', steps, 'Discriminators_steps', discriminators_steps)
                             loss_dict = {'Discriminator': avg_disc_loss}
-                            self.log_loss(self.accelerator, loss_dict, epoch, steps, 'Discriminator', discriminators_steps, self.disc_log_steps)
+                            self.log_loss(self.accelerator, loss_dict, epoch, steps, 'Discriminator', discriminators_steps + pretrain_disc_steps, self.disc_log_steps)
                             avg_disc_loss = loss_dict['Discriminator']
-                            # print(avg_disc_loss)
+
+                        
+                        if batch_gen_steps >= drop_last_point:
+                            self.steps += 1
+                            steps = int(self.steps.item())
+                            # Learning rate update
+                            lr = self.scheduler_g.get_last_lr()[0]
+
+                            step_time_log = accum_log(step_time_log, {'time_cost': time.time() - tic})
+                            batch_gen_steps = 0
+                            break
+
                 else: #todo: verify
                     for disc in self.discriminators.values():
                         for param in disc.parameters():
@@ -807,19 +823,46 @@ class MimiTrainer(nn.Module):
                     #     for param in disc.parameters():
                     #         if param.grad is not None:
                     #             print(f"{name} discriminator parameter {param.shape} has gradients!")
+                    # if x_hat.grad is not None:
+                    #     print('x_hat has grad')
+                    # found = False
+                    # for name, disc in self.discriminators.items():
+                    #     for param in disc.parameters():
+                    #         if param.grad is not None:
+                    #             print(f"{name} discriminator parameter {param.shape} has gradients!")
+                    #             found = True
+                    #             break
+                    #     if found:
+                    #         break
+                            # print(avg_disc_loss)
                     #             found = True
                     #             break
                     #     if found:
                     #         break
                     if (steps + 1) % self.disc_gradient_accumulation_steps == 0 and self.is_main:
-                        self.update_model(self.discriminators, self.optim_d, self.scheduler_d, self.ema_ds)
-                        discriminators_steps += 1
+                        pretrain_disc_steps += 1
+                        if not (pretrain_disc_steps % self.ema_freq):
+                            self.update_model(self.discriminators, self.optim_d, self.scheduler_d, self.ema_ds)
+                        else:
+                            self.update_model(self.discriminators, self.optim_d, self.scheduler_d)
 
-                        if not ((discriminators_steps - self.generator_start_late_steps) % self.disc_log_steps) or discriminators_steps <= self.generator_start_late_steps:
+                        if not (pretrain_disc_steps % self.disc_log_steps):
                             # print('Epoch', epoch, 'Step', steps, 'Discriminators_steps', discriminators_steps)
                             loss_dict = {'Discriminator': avg_disc_loss}
-                            self.log_loss(self.accelerator, loss_dict, epoch, steps, 'Discriminator', discriminators_steps, self.disc_log_steps)
+                            self.log_loss(self.accelerator, loss_dict, epoch, steps, 'Discriminator', pretrain_disc_steps, self.disc_log_steps)
                             avg_disc_loss = loss_dict['Discriminator']
+
+                        if not (pretrain_disc_steps % self.save_pretrained_discriminators_steps):
+                            # save model
+                            model_path = str(
+                                self.pretrained_discriminators_folder / f'Pretrained_Discriminators_{pretrain_disc_steps:08d}')
+                            self.save(model_path, 99999)
+                            self.print(
+                                f'{pretrain_disc_steps}: saving model to {str(self.pretrained_discriminators_folder)}')
+                        # elif discriminators_steps <= self.generator_start_late_steps:
+                        #     loss_dict = {'Discriminator': avg_disc_loss}
+                        #     self.log_loss(self.accelerator, loss_dict, epoch, steps, 'Discriminator', discriminators_steps, 1)
+                        #     avg_disc_loss = loss_dict['Discriminator']
 
                         
                         if batch_gen_steps >= drop_last_point:
