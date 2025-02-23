@@ -66,8 +66,8 @@ if __name__ == '__main__':
 
     # Initialize discriminators
     discriminators = {
-        "mpd": MultiPeriodDiscriminator(),
-        "msd": MultiScaleDiscriminator(),
+        # "mpd": MultiPeriodDiscriminator(),
+        # "msd": MultiScaleDiscriminator(),
         "mstftd": MultiScaleSTFTDiscriminator(config["msstft_disc_filters"]),
     }
 

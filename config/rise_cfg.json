@@ -60,7 +60,7 @@
     "gen_gradient_accumulation_steps": 16,
     "disc_gradient_accumulation_steps": 16,
     "generator_steps_skip": 0,
-    "generator_start_late_steps": 300,
+    "generator_start_late_steps": 10,
     "discriminators_warmup_epochs": 0,
 
     "generator_learning_rate": 3e-5,
@@ -84,10 +84,10 @@
     "gen_log_steps": 20,
     "save_model_steps": 200,
     "tqdm_value": false,
-    "save_pretrained_discriminators_steps": 100,
+    "save_pretrained_discriminators_steps": 10,
     "num_ckpt_keep": 10,
     "showpiece_num": 8,
 
     "checkpoint_path": null,
-    "pretrained_disc_path": "Log/spt_base/old_disc/Pretrained_Discriminators_00000500"
+    "pretrained_disc_path": "Log/spt_base/old_disc/Pretrained_Discriminators_00000800"
 }
